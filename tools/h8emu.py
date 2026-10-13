@@ -23,6 +23,7 @@ class Emu:
         self.pc = 0
         self.stubs = {}
         self.steps = 0
+        self.on_step = None                                  # f(emu) after every instruction (e.g. a clock)
         self.code_lo, self.code_hi = 0x16B000, 0x1C0000     # where we really execute (others need a stub)
 
     # ---------- memory ----------
@@ -89,6 +90,7 @@ class Emu:
         while self.pc != 0xDEAD00:
             self.step()
             self.steps += 1
+            if self.on_step: self.on_step(self)
             if self.steps > limit: raise RuntimeError('step limit at %06X' % self.pc)
 
     def goto_sub(self, target, ret):

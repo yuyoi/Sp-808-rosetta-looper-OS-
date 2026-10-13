@@ -90,7 +90,31 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
-## NEXT (after v0.8): the looper (own UI)
+## NEXT (after v0.9): hw test of the looper; then MIDI control for it; then keyboard mode (must be poly)
+
+## v0.9 (2026-10-13, built + emulator-tested, not on hw yet): LOOPER v1 (pad layers)
+- **User chose:** layer looper; control = PAD SAMPLING (their footswitch is wired to it) + a MIDI backend
+  (MIDI still to do); keyboard mode later, poly.
+- **Behaviour and engine:** see the docstring of tools/build_v09.py. Emulator session test:
+  `python -I tools/test_v09.py build_v09/sp808_v09.bin art/v09_emu.png` (fakes the screen engine, the pad
+  table and the stock 0x22/0x23 handlers; checks trim, start phases, double tap, hold, clear).
+- **Pad entry (32 bytes):** +0 start, +4 end, +8 loop point (longs, units of 16 samples = one compressed
+  block: 24 bytes stereo / 12 mono; disk address -> units 0x14D584), +12 wave (table 0x4227B6, 8 bytes per
+  wave: +0 flags (0x80 mono), +2 first block), +14 flags, +15 level, +16/+20 recorded start/end
+  (0x13CC64 copies them at the end of a take). Only +0..+15 go to the voice (0x14EA28 -> 0x43B670 + 16 * ch).
+- **Flags +14:** bits 0-1 loop OFF / ON(S-E) / ON(L-E), bits 2-3 pad play GATE 0 / TRIG 4 / DRUM 8 (DRUM
+  disables the loop), bit 7 mono. Built at arm time (0x13C30E) from 0x4277CB / 0x4277CC via table 0x166012.
+- **Pad play:** note-on 0x13735E -> 0x13749E -> voice 0x14EC5E (channel from 0x1000A6(flags)); note-off
+  0x13743A -> 0x137448(pad, r1l): r1l 0xFF = by mode (TRIG/DRUM ignore it), 0 = stop. All off 0x1371F4
+  (also kills TRIG voices via 0x1375A8). Pad state 16 x 14 bytes at 0x4275AE (+0 flags copy, +1 bit 1 voice).
+- **Vtables** (+0 event, +4 note-on, +8 note-off): normal 0x1653E8, sampling 0x1662D6 (= normal + "pad press
+  starts an armed take" when 0x4277D0 bit 3), take preview 0x166342, select pad 0x165FFE. 0x13704A switches
+  and stops all pads when the vtable changes.
+- **Take:** 0x13CAEC arms/starts (0x14F0C6 record channel @0x4032D4), 0x13CB54 stops and finalizes the take
+  entry 0x4277D8 (wave @0x4277E4); waiting/empty take: 0x122C1A frees the wave, 0x122642 empties the entry.
+  0x137B5A(bank) at the stop reloads pads only if the bank changed.
+- **Timing:** 8-bit timer 1 at phi/64, TCORA 0xEE -> ~1 ms (0x40185E). Loop clock in 16-sample units:
+  ms * 441 / 160.
 
 ## v0.8 (2026-10-13, WORKS on hw: "real awesome"): own record / take-done screens, 7-seg ticker
 - **User asked:** record/result screens in our graphics (big timer, live meter, waveform); the 7-segment
