@@ -90,7 +90,19 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
-## v0.6h (built 2026-10-13): MPC page rework, CLASSIC = replace, pad-pick debug
+## v0.6i (built 2026-10-13): encoder in our menu, CLASSIC records into the selected pad
+- **v0.6h on hw:** "it seems to sample now". But ENTER in CLASSIC recorded into a pad the user couldn't see ("show what pad you selected, or say pick one"). The debug line hasn't been reported yet.
+- **Encoder:**
+  - Main loop 0x13F0F2: keys 0x13F2F0 → dial 0x13139A (delta → 0x427058) → param edit 0x129260 (via the current param object @0x426D3C, nothing for screen 5) → commit 0x13F9C2.
+  - The commit sends event 6 (idle) to the screen on every pass without a screen change.
+  - Screen 5 maps event 6 + delta to RIGHT/LEFT (HOME page: DOWN/UP).
+- **MPC page rows:** Pad / Rec / Start / help.
+  - Hitting a pad on the MPC page selects it (SELPAD, RAM +0x13), and stock still plays it.
+  - Power-on: no pad selected. ENTER then says "hit a pad first!".
+- **CLASSIC:** records straight into the selected pad S, after saving S's entry. A pad hit P on the result screen does P ← take, S ← saved entry, then SELPAD = P.
+- **Pad used test:** 0x14D8AA(pad) = entry word 0 != 0xFFFF (current bank, 0x4225B4).
+
+## v0.6h (2026-10-13, ran on hw): MPC page rework, CLASSIC = replace, pad-pick debug
 - **v0.6g on hw:** the CLASSIC take stayed on the take pad T (pad 1) after hitting pad 13. "BANK FULL" after one take is real: the bank was full of old test takes.
 - **Swap code checked:** the bytes match the design, and PAD_GET/SET for the current bank (@0x40323C) are plain 32-byte copies to/from 0x4225B4 + 32·pad. So either the pad hit never reached g1, or something rewrote T afterwards.
 - **Key dispatcher 0x13F2F0:** it skips a group handler when the group's bit is set in the mask 0x427906 (setter 0x13F2E8), and the key then goes to the screen as event 9. 0x13AC1C sets 0x0002 (pads masked). The sampling screens don't touch the mask.
