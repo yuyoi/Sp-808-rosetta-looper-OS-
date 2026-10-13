@@ -15,7 +15,7 @@
 tools/xref.pkl
 tools/__pycache__/
 # work in progress, not built yet
-tools/build_v07.py
+tools/build_looptest_wip.py
 
 *.bin
 *.PRG

@@ -75,6 +75,34 @@ class Asm:
     def dec_w1(self, n): self._b(0x1B, 0x50 | n)                                        # dec.w #1,rn
     def jsr_ind(self, n): self._b(0x5D, n << 4)                                         # jsr @ern
     def jsr(self, addr): self._b(0x5E, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF)
+    # --- byte ALU, shifts, indirect access (graphics engine) ---
+    def add_b_rr(self, src, dst): self._b(0x08, (R8[src] << 4) | R8[dst])
+    def sub_b_rr(self, src, dst): self._b(0x18, (R8[src] << 4) | R8[dst])
+    def and_b_imm(self, imm, reg): self._b(0xE0 | R8[reg], imm & 0xFF)
+    def or_b_imm(self, imm, reg): self._b(0xC0 | R8[reg], imm & 0xFF)
+    def xor_b_imm(self, imm, reg): self._b(0xD0 | R8[reg], imm & 0xFF)
+    def and_b_rr(self, src, dst): self._b(0x16, (R8[src] << 4) | R8[dst])
+    def or_b_rr(self, src, dst): self._b(0x14, (R8[src] << 4) | R8[dst])
+    def xor_b_rr(self, src, dst): self._b(0x15, (R8[src] << 4) | R8[dst])
+    def not_b(self, reg): self._b(0x17, R8[reg])
+    def inc_b(self, reg): self._b(0x0A, R8[reg])
+    def dec_b(self, reg): self._b(0x1A, R8[reg])
+    def shll_b(self, reg): self._b(0x10, R8[reg])
+    def shlr_b(self, reg): self._b(0x11, R8[reg])
+    def shlr_w(self, n): self._b(0x11, 0x10 | n)
+    def shll_l(self, n): self._b(0x10, 0x30 | n)
+    def shll_l2(self, n): self._b(0x10, 0x70 | n)                                       # shll.l #2,ern
+    def extu_w(self, n): self._b(0x17, 0x50 | n)
+    def extu_l(self, n): self._b(0x17, 0x70 | n)
+    def mulxu_b(self, src, n): self._b(0x50, (R8[src] << 4) | n)                       # rn(16) = rn.l * src
+    def add_l_rr(self, src, dst): self._b(0x0A, 0x80 | (src << 4) | dst)
+    def adds1(self, n): self._b(0x0B, n)                                                # adds #1,ern
+    def mov_b_ld(self, ptr, reg): self._b(0x68, (ptr << 4) | R8[reg])                   # mov.b @erp,rd
+    def mov_b_st(self, reg, ptr): self._b(0x68, 0x80 | (ptr << 4) | R8[reg])            # mov.b rs,@erp
+    def mov_b_ldinc(self, ptr, reg): self._b(0x6C, (ptr << 4) | R8[reg])                # mov.b @erp+,rd
+    def mov_b_ld_disp(self, disp, ptr, reg): self._b(0x6E, (ptr << 4) | R8[reg], (disp >> 8) & 0xFF, disp & 0xFF)
+    def mov_l_st(self, src, ptr): self._b(0x01, 0x00, 0x69, 0x80 | (ptr << 4) | src)    # mov.l ers,@erp
+    def btst_abs(self, bit, addr): self._b(0x6A, 0x30, *struct.pack('>I', addr & 0xFFFFFF), 0x73, bit << 4)  # btst #b,@aa:32 (as stock 0x13FC12)
     def jmp(self, addr): self._b(0x5A, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF)
 
     def __getattr__(self, name):
