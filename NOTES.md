@@ -200,6 +200,29 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   <readback bytes 0xC00004..7>`, e.g. `S4 R0C 7F 7F 7F 7F`; redrawn 4x a second (not while waiting for the onset,
   so the onset latency stays one main-loop pass). On the first hardware test read it off the screen: R must be 0C
   on the page (01 after EXIT), the readback should move with the pads' audio (0F low nibbles = sound).
+
+### v1.1 (build 1110, 2026-10-13, emulator-tested, NOT on hw): MIDI keyboard, velocity, release
+- **Stock MIDI path found:** SCI0 is MIDI (0x1356D2 echoes RDR 0xFFFF7D to TDR = THRU). Byte parser 0x134B58:
+  status -> handler pointer @0x427504 from the table at **0x164B88** (note-off 0x134D0C, note-on 0x134D46, poly AT
+  ignore 0x13EFF0, CC 0x134F7A, PC 0x134FB4, ch AT / bend ignore) + data-byte counts at 0x164BA4 (2 2 0 2 1 0 0);
+  data bytes land at 0x42743B (note) / 0x42743C (velocity), count @0x427439, running status @0x42743A; handler called
+  with r0l = channel. Stock note -> pad: 0x134C72 (note - base note @0x43B3F8, 16 pads, pad channel @0x43B3E3 - 1),
+  0x134C9C = pad note-on with the MIDI velocity, 0x134CCE = note-off, pad mask @0x427512.
+- **Hook:** the two table entries now point to `m_off_tr` / `m_on_tr`: while the KEYS page is in PLAY they queue
+  (key, velocity) into a 16-entry ring (RAM +0x290, MWR/MRD) and return; otherwise `jmp` to the stock handler.
+  The ring is drained in `ki_voices` (main loop), so the DSP host port is never touched from the parser's context.
+- **Keys:** key id 0..60 = root - 24 .. root + 36 semitones (`ratio_tab` 61 x 3 coefs); pad p = key p + 17, MIDI
+  note n = key n - 36 (C4 = pad 8 = the sample's own pitch), notes outside C2..C7 are ignored.
+- **Velocity:** `vel_tab` (128 bytes) -> level target 1..48 (linear), stored per voice in VLVL (+0x258) and written
+  to the voice's `t` coefficient when the voice starts; pads play at 48.
+- **Release:** setting KREL 0-9 = 0 / 50 / 100 / 200 / 300 / 500 / 750 / 1000 / 1500 / 2000 ms (default 200): the
+  host drops a released voice's level one step every `rel_step[KREL]` ms (48 steps), the DSP's 1.5 ms one-pole
+  smooths each step; 0 = cut as in v1.0. Dial / LEFT / RIGHT set it while playing ("PLAY REL 200MS"); UP / DOWN
+  (and LEFT / RIGHT while idle) pick the source pad.
+- Tests (`test_v10.py`): note 72 -> 2004.5 Hz, velocity 40 -> peak 0.029 (= 0.094 x 15/48), 500 ms release ->
+  0.091 0.078 0.059 0.041 0.025 0.008 per 100 ms, out-of-range notes ignored, pads unchanged.
+- Unknowns on hw: the MIDI parser's context (interrupt or main loop: the ring makes both safe); the pad MIDI channel
+  setting is ignored while KEYS plays (any channel); the stock sequencer still gets CC/PC.
 - Tests: `keysdsp.py` (model: 1 kHz recorded, ratios 1 / 1.498 / 0.5 / 1.5 -> 1002 / 1498 / 504 / 1500 Hz, detector
   fires 1 sample after onset), `test_v10.py` (firmware + model: load 46 writes, routing 7/0/12, onset, 639 ms take,
   root 1000.4 Hz, +7 1499.7 Hz, -7 664.5 Hz, release, chord, exit restores routing 1).

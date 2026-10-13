@@ -120,6 +120,7 @@ Also fixed on the way: since v0.4 our RAM sat inside the stock 2000-record event
 - [x] Looper v1 (v0.9/v0.9b, hw test pending): pad layers, overdub + undo/clear, all on PAD SAMPLING (footswitch).
 - [ ] Looper next: MIDI control, the footswitch jack (ADC ch 11), tempo/click, save loops to disk.
 - [x] Keyboard mode v1 (v1.0, hw test pending): one sample across the 16 pads, 8 voices, in the FX DSP.
-- [ ] Keyboard next: MIDI keyboard, release time, longer samples (2-word phase), more voices, velocity.
+- [x] Keyboard v1.1 (hw test pending): MIDI keyboard (C2-C7, C4 = pad 8), velocity, release 0-2 s, DSP monitor line.
+- [ ] Keyboard next: longer samples (2-word phase), more voices, MIDI channel setting.
 - [ ] Strip the groove/song screens.
 - [ ] Doom.

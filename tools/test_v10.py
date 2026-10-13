@@ -140,6 +140,24 @@ def main(image_path, out):
     sim.pad(7); sim.pad(14); sim.run(5); shots.append(('2 notes', sim.shot())); sim.run(100)
     sim.out = []; sim.run(100); f, pk = freq(sim.out); print('chord     peak %.3f' % pk)
     sim.pad(7, False); sim.pad(14, False); sim.run(50)
+    # MIDI keyboard through the stock parser's handler table: note 72 = +12, velocity, release ramp
+    def midi(note, vel):
+        e.wb(bm.MIDI_NOTE, note); e.wb(bm.MIDI_VEL, vel); sim.call('m_on_tr' if vel else 'm_off_tr', 0)
+    midi(72, 127); sim.run(6); st = [e.rb(bm.VSTATE + v) for v in range(bm.NV)]
+    sim.out = []; sim.run(200); f, pk = freq(sim.out); midi(72, 0); sim.run(30)
+    print('midi 72   voices %s  f = %7.1f Hz (expect  2000.0) peak %.3f  after off: %s' % (st, f, pk, [e.rb(bm.VSTATE + v) for v in range(bm.NV)]))
+    midi(60, 40); sim.run(6); sim.out = []; sim.run(200); f, pk2 = freq(sim.out); midi(60, 0); sim.run(30)
+    print('midi 60 v40  f = %7.1f Hz (expect  1000.0) peak %.3f (expect %.3f)' % (f, pk2, pk * bm.VEL_TAB[40] / bm.KEYS_LEVEL))
+    e.wb(bm.KREL, 5)                                          # release 500 ms
+    midi(60, 127); sim.run(100); midi(60, 0); pks = []
+    for _ in range(6):
+        sim.out = []; sim.run(100); pks.append('%.3f' % freq(sim.out)[1])
+    print('release 500ms: peak per 100 ms after note off', pks, 'states', [e.rb(bm.VSTATE + v) for v in range(bm.NV)])
+    shots.append(('MIDI', sim.shot()))
+    midi(10, 127); midi(120, 127); sim.run(5)
+    print('out-of-range notes ignored:', e.rb(bm.MWR) == e.rb(bm.MRD), ' states', [e.rb(bm.VSTATE + v) for v in range(bm.NV)])
+    sim.key(bm.K_RIGHT); sim.key(bm.K_RIGHT); sim.run(5); print('dial in PLAY: REL ->', e.rb(bm.KREL), 'src pad still', e.rb(bm.KSRC) + 1)
+    sim.key(bm.K_UP); sim.run(5); print('UP in PLAY: src pad ->', e.rb(bm.KSRC) + 1)
     sim.key(bm.K_EXIT); sim.run(10)
     print('exit      page', e.rb(bm.PAGE), 'routing calls', sim.routing, 'route code %02X' % e.rb(bm.FX_ROUTE_CODE))
     print(ui_gfx.render(shots, out))
