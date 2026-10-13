@@ -103,11 +103,15 @@ Also fixed on the way: since v0.4 our RAM sat inside the stock 2000-record event
   - Icon home screen; MPC page with a 4×4 pad map and pop-ups.
   - Roland-chan in full detail, plus a boot sound (pad 16).
   - Everything is drawn into the boot ROM's LCD RAM (6 px per byte, streamed by interrupt). The details came from a dump of the boot ROM taken on the unit with Roland's own file-save routine. See `NOTES.md`.
+- **v0.8: own record and take-done screens, 7-segment ticker.**
+  - Record: big MM:SS.T timer, dB level meter with peak hold, remaining time, WAIT / REC.
+  - Take done: length, pad and the take's level envelope.
+  - The time-counter digits cycle "ROSETTA OS", the version and the MB left on the disk.
 
 ## TODO
 
-- [x] Record / result screens in the new graphics (live level meter, timer, take waveform) - v0.8, hw test pending.
-- [x] 7-segment line: "ROSETTA OS", version, MB left - v0.8, hw test pending.
+- [x] Record / result screens in the new graphics (live level meter, timer, take waveform) - v0.8.
+- [x] 7-segment line: "ROSETTA OS", version, MB left - v0.8.
 - [ ] Assignable record button (sampling and looper).
 - [ ] Looper v1: pad layers recording while the others loop, overdub + undo, auto start on signal, footswitch
       (ADC ch 11) and MIDI control, tempo/click, save loops to disk.

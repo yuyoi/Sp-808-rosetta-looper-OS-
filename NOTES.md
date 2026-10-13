@@ -90,9 +90,9 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
-## NEXT (after v0.8): hardware test of v0.8, then the looper (own UI)
+## NEXT (after v0.8): the looper (own UI)
 
-## v0.8 (2026-10-13, built + emulator-tested, not on hw yet): own record / take-done screens, 7-seg ticker
+## v0.8 (2026-10-13, WORKS on hw: "real awesome"): own record / take-done screens, 7-seg ticker
 - **User asked:** record/result screens in our graphics (big timer, live meter, waveform); the 7-segment
   "time keeping" part of the LCD to read "Rosetta OS", the version and megs left.
 - **Record screen 0x22 (stock handler 0x13C938):**
