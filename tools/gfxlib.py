@@ -2,8 +2,8 @@
 
 Framebuffer FB (RAM, 512 bytes) = 4 strips x 32 rows x 4 bytes. Pixel (x, y), x 0-127, y 0-31, 1 = dark:
     byte FB + (x >> 5) * 128 + y * 4 + ((x >> 3) & 3), bit 7 - (x & 7)
-gfx_flush blits the 4 strips with boot API 0x400478 at LCD x = 2 + 32*s, y 0 (the boot animation's call,
-32 px wide instead of 22, still one 4-byte word per row).
+gfx_flush converts FB into 6 strips of 24 px (STG, 768 bytes) and blits them with boot API 0x400478 at
+LCD x = 0, 24 .. 120, so the canvas sits at LCD x 4-131 (see the comment at gfx_flush for why 24).
 
 Routines (preserve er3-er6; er0-er2 are scratch unless noted):
   gfx_clear()                            FB = 0
@@ -70,7 +70,26 @@ def bitmap(rows):
     return bytes(out)
 
 
-def emit(a, FB, GMODE):
+LCD_X0 = 4                                       # canvas x 0 is LCD x 4 (gfx_flush)
+
+
+def strips24(px):
+    """canvas rows (32 x 128, truthy = dark) -> the 6 x 24 px strips gfx_flush builds (for data blitted as is)"""
+    out = bytearray()
+    for s in range(6):
+        for y in range(32):
+            v = 0
+            for i in range(24):
+                x = 24 * s + i - LCD_X0
+                if 0 <= x < 128 and px[y][x]: v |= 1 << (31 - i)
+            out += v.to_bytes(4, 'big')
+    return bytes(out)
+
+
+def emit(a, FB, GMODE, STG=None):
+    """STG = 768-byte RAM staging buffer for gfx_flush (default right after FB).
+    Note: build_v07 / v07b used a 32 px strip flush (broken on hw); rebuilding them now gives this flush."""
+    if STG is None: STG = FB + 0x200
     """emit the engine routines and data into Asm a (labels gfx_*, font_tiny, font_57, font_big, icon_*)"""
     # ---- gfx_clear ----
     a.label('gfx_clear')
@@ -80,20 +99,35 @@ def emit(a, FB, GMODE):
     a.mov_l_st(0, 1); a.adds4(1); a.dec_w1(2); a.bne('gc_loop')
     a.pop_l(2); a.rts()
 
-    # ---- gfx_flush ----
+    # ---- gfx_flush: FB (4 x 32 px strips) -> STG (6 x 24 px strips at LCD x 0, 24 .. 120, canvas at LCD x 4) ----
+    # On hardware (v0.7/v0.7b photos): a 32 px wide blit shears (the boot ROM uses a longer row for that width),
+    # and strips at x not on a byte boundary lose 1-2 columns at the seams. 24 px strips at x = 24*s: 4-byte rows,
+    # every seam on a multiple of 6 and of 8.
     a.label('gfx_flush')
-    a.push_l(4); a.push_l(5); a.push_l(6)
-    a.mov_l_imm(FB, 4); a.mov_l_imm(BLIT, 5); a.mov_b_imm(2, 'r6l')
-    a.label('gf_loop')
+    a.push_l(3); a.push_l(4); a.push_l(5); a.push_l(6)
+    a.mov_l_imm(FB, 4); a.mov_l_imm(STG, 5); a.mov_w_imm(32, 6)
+    a.label('gf_row')                                         # L0..L3 = canvas x 0-31, 32-63, 64-95, 96-127
+    a.mov_l_ld_disp(0, 4, 0); a.mov_l_rr(0, 1); a.shr32(1, 4); a.mov_l_st_disp(1, 0, 5)                  # W0 = L0 >> 4
+    a.shl32(0, 20); a.mov_l_ld_disp(128, 4, 2); a.mov_l_rr(2, 3); a.shr32(3, 12)
+    a.add_l_rr(3, 0); a.mov_l_st_disp(0, 128, 5)                                                        # W1 = L0<<20 | L1>>12
+    a.mov_l_rr(2, 0); a.shl32(0, 12); a.mov_l_ld_disp(256, 4, 2); a.mov_l_rr(2, 3); a.shr32(3, 20)
+    a.add_l_rr(3, 0); a.mov_l_st_disp(0, 256, 5)                                                        # W2 = L1<<12 | L2>>20
+    a.mov_l_rr(2, 0); a.shl32(0, 4); a.mov_l_st_disp(0, 384, 5)                                          # W3 = L2<<4
+    a.mov_l_rr(2, 0); a.shl32(0, 28); a.mov_l_ld_disp(384, 4, 1); a.mov_l_rr(1, 3); a.shr32(3, 4)
+    a.add_l_rr(3, 0); a.mov_l_st_disp(0, 512, 5)                                                        # W4 = L2<<28 | L3>>4
+    a.mov_l_rr(1, 0); a.shl32(0, 20); a.mov_l_st_disp(0, 640, 5)                                         # W5 = L3<<20
+    a.adds4(4); a.adds4(5); a.dec_w1(6); a.bne16('gf_row')
+    a.mov_l_imm(STG, 4); a.mov_l_imm(BLIT, 5); a.mov_b_imm(0, 'r6l')
+    a.label('gf_blit')
     a.sub_l(0, 0); a.push_l(0)                    # stack arg 0, as stock
     a.mov_l_rr(4, 1)
-    a.mov_w_imm((32 << 8) | 32, 8)                # e0 = width 32, rows 32
+    a.mov_w_imm((24 << 8) | 32, 8)                # e0 = width 24, rows 32
     a.mov_b_imm(0, 'r0h'); a.mov_b_rr('r6l', 'r0l')
     a.jsr_ind(5)
     a.adds4(7)
-    a.add_l_imm(128, 4); a.add_b_imm(32, 'r6l')
-    a.cmp_b_imm(2 + 4 * 32, 'r6l'); a.bne('gf_loop')
-    a.pop_l(6); a.pop_l(5); a.pop_l(4); a.rts()
+    a.add_l_imm(128, 4); a.add_b_imm(24, 'r6l')
+    a.cmp_b_imm(6 * 24, 'r6l'); a.bne('gf_blit')
+    a.pop_l(6); a.pop_l(5); a.pop_l(4); a.pop_l(3); a.rts()
 
     # ---- gfx_put8 ----
     a.label('gfx_put8')

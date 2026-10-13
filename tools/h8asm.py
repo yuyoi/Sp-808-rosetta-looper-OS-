@@ -102,6 +102,16 @@ class Asm:
     def mov_b_ldinc(self, ptr, reg): self._b(0x6C, (ptr << 4) | R8[reg])                # mov.b @erp+,rd
     def mov_b_ld_disp(self, disp, ptr, reg): self._b(0x6E, (ptr << 4) | R8[reg], (disp >> 8) & 0xFF, disp & 0xFF)
     def mov_l_st(self, src, ptr): self._b(0x01, 0x00, 0x69, 0x80 | (ptr << 4) | src)    # mov.l ers,@erp
+    def mov_l_ld_disp(self, disp, ptr, dst): self._b(0x01, 0x00, 0x6F, (ptr << 4) | dst, (disp >> 8) & 0xFF, disp & 0xFF)
+    def mov_l_st_disp(self, src, disp, ptr): self._b(0x01, 0x00, 0x6F, 0x80 | (ptr << 4) | src, (disp >> 8) & 0xFF, disp & 0xFF)
+    def shlr_l(self, n): self._b(0x11, 0x30 | n)
+    def shlr_l2(self, n): self._b(0x11, 0x70 | n)                                       # shlr.l #2,ern
+    def shl32(self, n, count):                                                          # ern <<= count
+        for _ in range(count // 2): self.shll_l2(n)
+        if count & 1: self.shll_l(n)
+    def shr32(self, n, count):                                                          # ern >>= count (logical)
+        for _ in range(count // 2): self.shlr_l2(n)
+        if count & 1: self.shlr_l(n)
     def btst_abs(self, bit, addr): self._b(0x6A, 0x30, *struct.pack('>I', addr & 0xFFFFFF), 0x73, bit << 4)  # btst #b,@aa:32 (as stock 0x13FC12)
     def jmp(self, addr): self._b(0x5A, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF)
 

@@ -116,6 +116,11 @@ class Emu:
                 if b3 & 0x80: self.wl(self.g32(s), self.g32(d)); v = self.g32(d)
                 else: v = self.rl(self.g32(s)); self.s32(d, v)
                 self.logic(v, 32); self.pc = pc + 4; return
+            if b2 == 0x6F:                                 # mov.l @(d16,ers) / store
+                p = (b3 >> 4) & 7; a = (self.g32(p) + struct.unpack('>h', self.flash_bytes(pc + 4, 2))[0]) & 0xFFFFFF
+                if b3 & 0x80: v = self.g32(b3 & 7); self.wl(a, v)
+                else: v = self.rl(a); self.s32(b3 & 7, v)
+                self.logic(v, 32); self.pc = pc + 6; return
             if b2 == 0x6B:
                 a = abs32(4)
                 if b3 & 0xF0 == 0x20: v = self.rl(a); self.s32(b3 & 7, v)
