@@ -10,12 +10,14 @@ Stock OS routines are not emulated: every jsr/jmp to an address in `stubs` runs 
 import struct
 
 FLASH, RAM_LO, RAM_HI = 0x100000, 0x400000, 0x800000      # RAM incl. sample RAM (size on the unit unknown)
+ONCHIP = 0xFFF000                                         # on-chip RAM / registers (plain memory here)
 
 
 class Emu:
     def __init__(self, image):
         self.flash = bytearray(image)
         self.ram = bytearray(RAM_HI - RAM_LO)
+        self.onchip = bytearray(0x1000)
         self.er = [0] * 8
         self.N = self.Z = self.V = self.C = 0
         self.pc = 0
@@ -28,10 +30,12 @@ class Emu:
         a &= 0xFFFFFF
         if FLASH <= a < FLASH + len(self.flash): return self.flash[a - FLASH]
         if RAM_LO <= a < RAM_HI: return self.ram[a - RAM_LO]
+        if a >= ONCHIP: return self.onchip[a - ONCHIP]
         raise RuntimeError('read %06X at pc %06X' % (a, self.pc))
     def wb(self, a, v):
         a &= 0xFFFFFF
         if RAM_LO <= a < RAM_HI: self.ram[a - RAM_LO] = v & 0xFF; return
+        if a >= ONCHIP: self.onchip[a - ONCHIP] = v & 0xFF; return
         raise RuntimeError('write %06X at pc %06X' % (a, self.pc))
     def rw(self, a): return (self.rb(a) << 8) | self.rb(a + 1)
     def ww(self, a, v): self.wb(a, v >> 8); self.wb(a + 1, v)
@@ -288,6 +292,15 @@ class Emu:
             {8: self.s8, 16: self.s16, 32: self.s32}[kind](r, v); self.logic(v, kind)
             self.pc = pc + 2; return
         if b0 == 0x50: self.s16(lo, (self.g16(lo) & 0xFF) * self.g8(hi)); self.pc = pc + 2; return
+        if b0 == 0x51:                                     # divxu.b rs, rd: rdl = quot, rdh = rem
+            v, d = self.g16(lo), self.g8(hi)
+            self.s16(lo, ((v % d) << 8) | (v // d & 0xFF)); self.pc = pc + 2; return
+        if b0 == 0x52: self.s32(lo & 7, self.g16(lo & 7) * self.g16(hi)); self.pc = pc + 2; return
+        if b0 == 0x53:                                     # divxu.w rs, erd: rd = quot, ed = rem
+            v, d = self.g32(lo & 7), self.g16(hi)
+            self.s32(lo & 7, ((v % d) << 16) | (v // d & 0xFFFF)); self.pc = pc + 2; return
+        if b0 == 0x09: self.s16(lo, self.add(self.g16(lo), self.g16(hi), 16)); self.pc = pc + 2; return
+        if b0 == 0x1F and b1 & 0x80: self.sub(self.g32(lo & 7), self.g32((b1 >> 4) & 7), 32); self.pc = pc + 2; return
         if b0 == 0x73: self.Z = int(not (self.g8(lo) >> hi) & 1); self.pc = pc + 2; return
         if b0 == 0x00 and b1 == 0x00: self.pc = pc + 2; return
         raise RuntimeError('unknown opcode %02X %02X at %06X' % (b0, b1, pc))

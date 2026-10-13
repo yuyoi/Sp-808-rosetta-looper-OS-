@@ -47,8 +47,8 @@ and is not in this repo. Unzip `SP808#1.MID` .. `SP808#8.MID` into `upd/`, then:
 ```
 pip install numpy pillow
 python -I tools/decode_upd.py upd sp808_v1050_raw.bin                  # Roland update -> OS image
-python -I tools/build_v07f.py sp808_v1050_raw.bin build_v07f           # -> build_v07f/SP808.PRG
-python -I tools/fat_add.py disk.img build_v07f/SP808.PRG --replace     # put it on your Zip / ZuluIDE image
+python -I tools/build_v08.py sp808_v1050_raw.bin build_v08             # -> build_v08/SP808.PRG
+python -I tools/fat_add.py disk.img build_v08/SP808.PRG --replace      # put it on your Zip / ZuluIDE image
 ```
 
 On the SP-808: power on with the disk in, answer **YES** to "Update System?", then power-cycle when it asks for
@@ -70,9 +70,9 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v07f.py` | each firmware version as a patch script (v0.7f = current; v0.7b-e are LCD diagnostics) |
+| `tools/build_v02.py` .. `tools/build_v08.py` | each firmware version as a patch script (v0.8 = current; v0.7b-e are LCD diagnostics) |
 | `tools/gfxlib.py`, `tools/ui_gfx.py` | graphics engine (framebuffer, fonts, icons, LCD packing) and the mockup renderer |
-| `tools/h8emu.py`, `tools/test_ui.py` | small H8S emulator that runs our code on the PC, screen renderer for it |
+| `tools/h8emu.py`, `tools/test_ui.py`, `tools/test_v08.py` | small H8S emulator that runs our code on the PC, screen tests for it |
 | `tools/bootanim.py` | boot animation player + hook; frames from `assets/roland_chan_frames.npz` |
 | `tools/roland_chan.py` | turns the line art into LCD frames (needs the drawing, not included) |
 | `tools/fat_add.py`, `tools/inject_prg.py` | put SP808.PRG on a FAT12/16 disk image (bare volume or MBR) |
@@ -106,7 +106,8 @@ Also fixed on the way: since v0.4 our RAM sat inside the stock 2000-record event
 
 ## TODO
 
-- [ ] Record / result screens in the new graphics (live level meter, timer, waveform).
+- [x] Record / result screens in the new graphics (live level meter, timer, take waveform) - v0.8, hw test pending.
+- [x] 7-segment line: "ROSETTA OS", version, MB left - v0.8, hw test pending.
 - [ ] Assignable record button (sampling and looper).
 - [ ] Looper v1: pad layers recording while the others loop, overdub + undo, auto start on signal, footswitch
       (ADC ch 11) and MIDI control, tempo/click, save loops to disk.

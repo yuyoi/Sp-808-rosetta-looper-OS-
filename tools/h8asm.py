@@ -114,6 +114,16 @@ class Asm:
         for _ in range(count // 2): self.shlr_l2(n)
         if count & 1: self.shlr_l(n)
     def btst_abs(self, bit, addr): self._b(0x6A, 0x30, *struct.pack('>I', addr & 0xFFFFFF), 0x73, bit << 4)  # btst #b,@aa:32 (as stock 0x13FC12)
+    def divxu_b(self, src, n): self._b(0x51, (R8[src] << 4) | n)                       # rn / src: rnl = quot, rnh = rem
+    def mulxu_w(self, src, n): self._b(0x52, (src << 4) | n)                           # ern = rn * src (16 x 16)
+    def divxu_w(self, src, n): self._b(0x53, (src << 4) | n)                           # ern / src: rn = quot, en = rem
+    def subs1(self, n): self._b(0x1B, n)                                                # subs #1,ern
+    def add_w_rr(self, src, dst): self._b(0x09, (src << 4) | dst)
+    def sub_w_rr(self, src, dst): self._b(0x19, (src << 4) | dst)
+    def cmp_w_rr(self, src, dst): self._b(0x1D, (src << 4) | dst)                     # flags of dst - src
+    def cmp_l_rr(self, src, dst): self._b(0x1F, 0x80 | (src << 4) | dst)
+    def mov_w_ld(self, ptr, n): self._b(0x69, (ptr << 4) | n)                          # mov.w @erp,rn
+    def mov_w_st(self, n, ptr): self._b(0x69, 0x80 | (ptr << 4) | n)                   # mov.w rn,@erp
     def jmp(self, addr): self._b(0x5A, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF)
 
     def __getattr__(self, name):

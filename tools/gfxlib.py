@@ -19,6 +19,8 @@ Routines (preserve er3-er6; er0-er2 are scratch unless noted):
   gfx_fill(r1l x, r1h y, r2l w, r2h h)   rectangle, mode @GMODE
   gfx_text(er0 str, r1l x, r1h y, er2 font) -> r1l = x after the text
   gfx_bitmap(er0 bmp, r1l x, r1h y)      bmp = w, h, then rows of (w + 7) / 8 bytes (MSB = left)
+  gfx_patrow(er0 pat, r1h y, r2l w)      OR pixels x 0..w-1 of a 16-byte row pattern into row y (meters)
+  gfx_vline(r1l x, r1h y, r2h h)         set pixels (x, y .. y + h - 1), y + h <= 32
 Font = height, first char, last char, 0, then per glyph: advance, height row bytes (MSB = left).
 Characters outside first..last draw as glyph 0 (space).
 """
@@ -263,6 +265,41 @@ def emit(a, FB, GMODE, STG=None):
     a.inc_b('r1h'); a.dec_b('r4h'); a.bra('gb_row')
     a.label('gb_done')
     a.pop_l(5); a.pop_l(4); a.pop_l(3); a.rts()
+
+    # ---- gfx_patrow: OR the first r2l px (from x 0) of a 16-byte row pattern @er0 into row r1h ----
+    a.label('gfx_patrow')
+    a.push_l(3); a.push_l(4); a.push_l(5)
+    a.mov_l_rr(0, 3)
+    a.sub_l(4, 4); a.mov_b_rr('r1h', 'r4l'); a.shll_l2(4); a.add_l_imm(FB, 4)      # er4 = FB + y * 4
+    a.mov_b_imm(16, 'r5h'); a.mov_b_rr('r2l', 'r5l')
+    a.label('pr_byte')
+    a.mov_b_rr('r5l', 'r5l'); a.beq('pr_done')
+    a.mov_b_ldinc(3, 'r0l')
+    a.cmp_b_imm(8, 'r5l'); a.bcc('pr_full')
+    a.sub_l(1, 1); a.mov_b_rr('r5l', 'r1l'); a.mov_l_imm('gfx_masks', 2); a.add_l_rr(1, 2)
+    a.mov_b_ld(2, 'r1l'); a.and_b_rr('r1l', 'r0l'); a.mov_b_imm(0, 'r5l'); a.bra('pr_st')
+    a.label('pr_full'); a.add_b_imm(0x100 - 8, 'r5l')
+    a.label('pr_st')
+    a.mov_b_ld(4, 'r1l'); a.or_b_rr('r0l', 'r1l'); a.mov_b_st('r1l', 4)
+    a.adds1(4); a.dec_b('r5h'); a.beq('pr_done')
+    a.mov_b_rr('r5h', 'r1l'); a.and_b_imm(3, 'r1l'); a.bne('pr_byte')
+    a.add_l_imm(124, 4); a.bra('pr_byte')                                          # next 32 px strip
+    a.label('pr_done')
+    a.pop_l(5); a.pop_l(4); a.pop_l(3); a.rts()
+
+    # ---- gfx_vline: set pixels (r1l, r1h .. r1h + r2h - 1) ----
+    a.label('gfx_vline')
+    a.push_l(3)
+    a.mov_b_rr('r2h', 'r3h'); a.beq('vl_done')
+    a.bsr16('p8_addr')                                                             # er2 = byte of (x, y)
+    a.mov_b_rr('r1l', 'r0h'); a.and_b_imm(7, 'r0h'); a.mov_b_imm(0x80, 'r3l')
+    a.label('vl_sh')
+    a.mov_b_rr('r0h', 'r0h'); a.beq('vl_row'); a.shlr_b('r3l'); a.dec_b('r0h'); a.bra('vl_sh')
+    a.label('vl_row')
+    a.mov_b_ld(2, 'r0l'); a.or_b_rr('r3l', 'r0l'); a.mov_b_st('r0l', 2)
+    a.adds4(2); a.dec_b('r3h'); a.bne('vl_row')
+    a.label('vl_done')
+    a.pop_l(3); a.rts()
 
     # ---- data ----
     a.label('gfx_masks'); a.raw(bytes([0x00, 0x80, 0xC0, 0xE0, 0xF0, 0xF8, 0xFC, 0xFE, 0xFF]))

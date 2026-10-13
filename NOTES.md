@@ -90,16 +90,43 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
-## NEXT (after v0.7f, 2026-10-13): our own record / result screens, 7-seg line, looper
-- **User wants:**
-  - Record/result screens in our graphics: big timer, live level meter, waveform.
-  - The 7-segment line (LCD RAM rows 0-1 at 0x40187A) to show "rOSEttA", the version and megs left.
-  - Then the looper (own UI).
-- **Record screen 0x22 RE so far:**
-  - **0x13C272 is the level meter.** Two channel records at 0x427838 (L) and 0x42783E (R). Per record: +0 level, +3 peak, +4 word peak-hold countdown (peak cleared when it hits 0). It takes the max of L/R level and peak and redraws only when they change (last shown at 0x4277F8 / 0x4277F9) via 0x131EF0(r0l = level, r0h = peak, er1 = 0x16600A). r0 != 0 forces a reset (0xFF).
-  - **0x13C236** draws icon 0x165F78 with 0x400470 at x = table 0x1643A4[@0xFFF0D4] + 3, y 0x85, after 0x131750(0x0585, 0x1A86). @0xFFF0D4 is an on-chip register; probably the input select or the trigger level. Still to check.
-  - Event 6 also calls 0x14D91E (memory/time left) and 0x14D948(r0h 0x54, r0l 0x43, e0 = @0x426E29 & 2, r1 = no-memory flag): probably the remaining-time display. To RE next.
-- **Plan:** w22/w23 call stock for the logic, then our draw + flush overwrite the whole dot area (our flush rewrites all 22 bytes of every dot row). Throttle redraws on the idle event, because the main loop also streams the disk while recording.
+## NEXT (after v0.8): hardware test of v0.8, then the looper (own UI)
+
+## v0.8 (2026-10-13, built + emulator-tested, not on hw yet): own record / take-done screens, 7-seg ticker
+- **User asked:** record/result screens in our graphics (big timer, live meter, waveform); the 7-segment
+  "time keeping" part of the LCD to read "Rosetta OS", the version and megs left.
+- **Record screen 0x22 (stock handler 0x13C938):**
+  - Events: 0 enter (arms the take), 1 leave (0x13CB54 stops it), 5 redraw, 6 idle, 9 key, 0x19 = finish.
+    Return value unused; when r5 = 1 the epilogue 0x13CACA stops the take, CLS, unlocks, goes to 0x23.
+  - Event 6 logic: 0x14D91E(0) == 0 (disk full) -> finish. "Waiting Signal..." text 0x166288 ->
+    "Now Sampling..." 0x166298 (pointer 0x427910) when 0x4277D0 bit 2 is set and 0xFFF0DC bit 0 is clear.
+  - **Level meter:** 0x13D0DE (every main-loop pass from 0x13F048) reads 14 meter channels round-robin via
+    API 0x400354/0x400358 into records of 6 bytes at 0x4277FC + 6*ch: word +0 = DSP peak (high byte = level
+    0-127), +2 bit 0 = dirty, +3 = peak, word +4 = peak hold (100). Input L = ch 10 (0x427838), R = ch 11
+    (0x42783E). Stock draw 0x131EF0: 21-row vertical bar, level -> top row via table 0x1643A4 (128 entries,
+    log). 0x13C236 places the trigger-level icon with the same table (@0xFFF0D4 = trigger level).
+  - **Remaining:** free 32 KB blocks = @0x411B6E - @0x42741A - 3 (0x14D90E). 0x14D948 turns it into time:
+    frames per block = 0x8000 / (24 stereo, 12 mono: 0x426E29 bit 1) * 16, / 44100 (or 32000, 0x14DB06),
+    * 1000 / @0x43B326. 100 MB Zip ~ 3000 blocks ~ 24:46 stereo.
+  - **Ticks:** boot ROM 8-bit timer 1 IRQ 0x93F0 (TCR1 0x0A, TCORA1 0xEE) increments the long 0x40185E
+    (~1 ms) and runs 8 timer slots (12 bytes each at 0x4017FE, API 0x4002E4(r0l slot, e0 period, er1 func)).
+    The OS's slot 7 (period 10) increments 0x4278B4 (10 ms) and 0x4278B6 (every 128 ticks).
+- **Take-done screen 0x23 (0x13CE1C):** 0 enter (empty take -> 0x20 "Cenceled."; auto trim -> 0x24),
+  2 shown ("Now Working...", writes the take into the pad, sets 0x4277D0 bit 6, CLS, redraw),
+  5 "Finished." / "Disk Full." + meter, 6 meter, 9 ENTER -> 0x1F / EXIT -> 0x20 "Try Again.".
+- **7-segment line** (LCD RAM rows 0-1): 25 digit positions; type and word offset per digit in the boot ROM
+  tables 0xA226 / 0xA23F. Type 0 bits: row 0 a 0x2000 g 0x1000 c 0x0800 b 0x0400, row 1 f 0x2000 e 0x1000
+  d 0x0800 dp 0x0400; types 1 and 2 are the same bits shifted (0xA2A0). APIs (the BOOTRAM dump is 8 bytes
+  off: API X is the dump's entry X + 8): 0x4003D8 clear the line, 0x4003DC set digit (r0l), 0x4003E0 write
+  pattern er0 (mask 0x3C003800), 0x4003E4 pattern er0 under mask er1, 0x4003E8 char code r0l (font 0xB3F2:
+  0 blank, 1 '-', 2-11 digits, 0x0C-0x11 A-F), 0x4003EC number, 0x4003F4 two digits (r0l digit, r0h value).
+  OS: 0x132480 prints ASCII (letters from table 0x163F26). Digits 0-11 = the time counter: 0x1441FE writes
+  "HH-MM-SS-FF" (two-digit fields at 0, 3, 6, 9; '-' at 2, 5, 8), measure mode "MMM-BB-TT". 12-15 tempo
+  (0x144244), 17-18 sample rate "44"/"32" (0x14DAE0).
+- **v0.8 build (tools/build_v08.py, version 1080):** see its docstring. Our screens draw only in MPC take
+  flows (SHIFT+PAD SAMPLING keeps the stock screens). ~39k instructions per 100 ms record frame.
+  Emulator test: `python -I tools/test_v08.py build_v08/sp808_v08.bin art/v08_emu.png`.
+  LOOP page = "coming soon"; the LCD test page and the boot ROM dump are gone.
 
 ## v0.7-v0.7f (2026-10-13): own graphics engine, pixel-exact LCD (v0.7f WORKS on hw)
 - **Engine:** tools/gfxlib.py, with fonts and icons in tools/ui_gfx.py. Mockups in art/ (not in the repo) were approved.
