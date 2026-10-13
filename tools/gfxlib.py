@@ -2,8 +2,15 @@
 
 Framebuffer FB (RAM, 512 bytes) = 4 strips x 32 rows x 4 bytes. Pixel (x, y), x 0-127, y 0-31, 1 = dark:
     byte FB + (x >> 5) * 128 + y * 4 + ((x >> 3) & 3), bit 7 - (x & 7)
-gfx_flush converts FB into 6 strips of 24 px (STG, 768 bytes) and blits them with boot API 0x400478 at
-LCD x = 0, 24 .. 120, so the canvas sits at LCD x 4-131 (see the comment at gfx_flush for why 24).
+gfx_flush packs FB straight into the boot ROM's LCD framebuffer (canvas at LCD x 4-131), which an interrupt
+streams to the LCD all the time. From the boot ROM dump (dump/BOOTROM.BIN, 2026-10-13):
+- LCD RAM image at 0x40187A: 34 rows x 24 bytes, 6 pixels per byte in bits 5-0 (bit 5 = left), bits 7-6 = 0.
+  Rows 0-1 are the 7-segment / icon line, rows 2-33 the 32 dot rows: pointer @0x401EC4 (= 0x4018AA),
+  stride @0x401EBC (= 24). Init 0x9DA8 / 0xA084, full copy 0xA046, interrupt streamer 0x9C58 (port 0xA00000
+  command/status, 0xA00001 data).
+- The blit API 0x400478 (0xB074) reads its source as 7 pixels per byte (bits 7-1, "and.w #0x1FE"), rows of
+  ceil(w/7) bytes; rows-byte bit 7 = compressed source (unpacked to 0x401BAA), y bit 6 = invert,
+  y bit 7 = second draw op. That is why 8-px-per-byte bitmaps lost every 8th pixel.
 
 Routines (preserve er3-er6; er0-er2 are scratch unless noted):
   gfx_clear()                            FB = 0
@@ -71,6 +78,21 @@ def bitmap(rows):
 
 
 LCD_X0 = 4                                       # canvas x 0 is LCD x 4 (gfx_flush)
+LCD_FBPTR, LCD_STRIDE, LCD_BYTES = 0x401EC4, 24, 22   # dot-row pointer, bytes per row, bytes we write (132 px)
+
+
+def pack6(px, x0):
+    """one row of pixels (truthy = dark) starting at LCD x0 -> 24 LCD bytes (6 px per byte, bit 5 = left)"""
+    out = bytearray(LCD_STRIDE)
+    for i, on in enumerate(px):
+        x = x0 + i
+        if on and 0 <= x < 6 * LCD_STRIDE: out[x // 6] |= 1 << (5 - x % 6)
+    return bytes(out)
+
+
+def unpack6(row):
+    """24 LCD bytes -> 144 pixels (for tests)"""
+    return [(row[x // 6] >> (5 - x % 6)) & 1 for x in range(6 * LCD_STRIDE)]
 
 
 def strips24(px):
@@ -99,34 +121,43 @@ def emit(a, FB, GMODE, STG=None):
     a.mov_l_st(0, 1); a.adds4(1); a.dec_w1(2); a.bne('gc_loop')
     a.pop_l(2); a.rts()
 
-    # ---- gfx_flush: FB (4 x 32 px strips) -> STG (6 x 24 px strips at LCD x 0, 24 .. 120, canvas at LCD x 4) ----
-    # On hardware (v0.7/v0.7b photos): a 32 px wide blit shears (the boot ROM uses a longer row for that width),
-    # and strips at x not on a byte boundary lose 1-2 columns at the seams. 24 px strips at x = 24*s: 4-byte rows,
-    # every seam on a multiple of 6 and of 8.
+    # ---- gfx_flush: FB -> the boot ROM's LCD RAM image (6 px per byte), canvas at LCD x 4 ----
+    # Per row the bit stream is 4 zero bits + 128 canvas bits = 132 bits = 22 LCD bytes. Stream byte j is the
+    # canvas row shifted right by a nibble: S[j] = c[j-1] << 4 | c[j] >> 4 (c[-1] = c[16] = 0). Every 3 stream
+    # bytes (24 bits) make 4 LCD bytes; the last 12 bits make 2. LCD bytes 22-23 (x 132-143) are cleared.
+    def cdisp(j): return (j >> 2) * 128 + (j & 3)               # canvas byte j of the row at er4
+    def load_c(j, reg):
+        if 0 <= j < 16: a.mov_b_ld_disp(cdisp(j), 4, reg)
+        else: a.mov_b_imm(0, reg)
+    def stream(j, dst):                                         # dst = S[j] (uses r3l)
+        load_c(j - 1, dst)
+        for _ in range(4): a.shll_b(dst)
+        load_c(j, 'r3l')
+        for _ in range(4): a.shlr_b('r3l')
+        a.or_b_rr('r3l', dst)
+    def put(k):                                                 # LCD byte k of the row <- r3h
+        a.mov_b_st_disp('r3h', k, 5)
     a.label('gfx_flush')
     a.push_l(3); a.push_l(4); a.push_l(5); a.push_l(6)
-    a.mov_l_imm(FB, 4); a.mov_l_imm(STG, 5); a.mov_w_imm(32, 6)
-    a.label('gf_row')                                         # L0..L3 = canvas x 0-31, 32-63, 64-95, 96-127
-    a.mov_l_ld_disp(0, 4, 0); a.mov_l_rr(0, 1); a.shr32(1, 4); a.mov_l_st_disp(1, 0, 5)                  # W0 = L0 >> 4
-    a.shl32(0, 20); a.mov_l_ld_disp(128, 4, 2); a.mov_l_rr(2, 3); a.shr32(3, 12)
-    a.add_l_rr(3, 0); a.mov_l_st_disp(0, 128, 5)                                                        # W1 = L0<<20 | L1>>12
-    a.mov_l_rr(2, 0); a.shl32(0, 12); a.mov_l_ld_disp(256, 4, 2); a.mov_l_rr(2, 3); a.shr32(3, 20)
-    a.add_l_rr(3, 0); a.mov_l_st_disp(0, 256, 5)                                                        # W2 = L1<<12 | L2>>20
-    a.mov_l_rr(2, 0); a.shl32(0, 4); a.mov_l_st_disp(0, 384, 5)                                          # W3 = L2<<4
-    a.mov_l_rr(2, 0); a.shl32(0, 28); a.mov_l_ld_disp(384, 4, 1); a.mov_l_rr(1, 3); a.shr32(3, 4)
-    a.add_l_rr(3, 0); a.mov_l_st_disp(0, 512, 5)                                                        # W4 = L2<<28 | L3>>4
-    a.mov_l_rr(1, 0); a.shl32(0, 20); a.mov_l_st_disp(0, 640, 5)                                         # W5 = L3<<20
-    a.adds4(4); a.adds4(5); a.dec_w1(6); a.bne16('gf_row')
-    a.mov_l_imm(STG, 4); a.mov_l_imm(BLIT, 5); a.mov_b_imm(0, 'r6l')
-    a.label('gf_blit')
-    a.sub_l(0, 0); a.push_l(0)                    # stack arg 0, as stock
-    a.mov_l_rr(4, 1)
-    a.mov_w_imm((24 << 8) | 32, 8)                # e0 = width 24, rows 32
-    a.mov_b_imm(0, 'r0h'); a.mov_b_rr('r6l', 'r0l')
-    a.jsr_ind(5)
-    a.adds4(7)
-    a.add_l_imm(128, 4); a.add_b_imm(24, 'r6l')
-    a.cmp_b_imm(6 * 24, 'r6l'); a.bne('gf_blit')
+    a.mov_l_imm(FB, 4); a.mov_l_from_abs(LCD_FBPTR, 5); a.mov_w_imm(32, 14)     # e6 = rows
+    a.label('gf_row')
+    for g in range(6):
+        stream(3 * g, 'r0l'); stream(3 * g + 1, 'r1l')
+        if g < 5: stream(3 * g + 2, 'r2l')
+        a.mov_b_rr('r0l', 'r3h'); a.shlr_b('r3h'); a.shlr_b('r3h'); put(4 * g)                     # s0 >> 2
+        a.mov_b_rr('r0l', 'r3h'); a.and_b_imm(3, 'r3h')
+        for _ in range(4): a.shll_b('r3h')
+        a.mov_b_rr('r1l', 'r6h')
+        for _ in range(4): a.shlr_b('r6h')
+        a.or_b_rr('r6h', 'r3h'); put(4 * g + 1)                                                     # s0 & 3 << 4 | s1 >> 4
+        if g == 5: break
+        a.mov_b_rr('r1l', 'r3h'); a.and_b_imm(0x0F, 'r3h'); a.shll_b('r3h'); a.shll_b('r3h')
+        a.mov_b_rr('r2l', 'r6h')
+        for _ in range(6): a.shlr_b('r6h')
+        a.or_b_rr('r6h', 'r3h'); put(4 * g + 2)                                                     # s1 & 15 << 2 | s2 >> 6
+        a.mov_b_rr('r2l', 'r3h'); a.and_b_imm(0x3F, 'r3h'); put(4 * g + 3)                         # s2 & 63
+    a.mov_b_imm(0, 'r3h'); put(22); put(23)
+    a.adds4(4); a.add_l_imm(LCD_STRIDE, 5); a.dec_w1(14); a.bne16('gf_row')
     a.pop_l(6); a.pop_l(5); a.pop_l(4); a.pop_l(3); a.rts()
 
     # ---- gfx_put8 ----

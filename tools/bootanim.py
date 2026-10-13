@@ -10,9 +10,10 @@ We patch 0x14874A to jmp to our player, which ends with jmp 0x1487F0. Stack and 
 Blit API 0x400478 (as the stock code uses it): r0h = y, r0l = x, er1 = bitmap rows, e0 = (width << 8) | rows,
 one long pushed (0) as a stack argument. Rows are padded to 4 bytes, MSB = leftmost pixel, 1 = dark.
 er2-er6 survive the call (the stock loop relies on it).
-To stay inside the proven format, each 132x32 frame is drawn as 6 strips of 22 px (4 bytes/row),
-exactly like the stock "8"/"0" digit bitmaps. x = 2: centred on the 136 px wide screen
-(the stock logo spans x 3..133).
+Since v0.7f the player does not blit at all: each 132x32 frame is stored pre-packed in the boot ROM's LCD RAM
+format (32 rows x 24 bytes, 6 px per byte, see gfxlib) and copied to @0x401EC4, which an interrupt streams to the
+LCD. The blit reads its source as 7 px per byte, so the old 22 px strips lost every 8th pixel.
+x = 2: centred on the 136 px wide screen (the stock logo spans x 3..133).
 
 Frames come from tools/roland_chan.py (the user's art, option 5 = lanczos + sharpen + dither).
 """
@@ -39,14 +40,10 @@ def frames():
 
 
 def pack(scr):
-    out = bytearray()
-    for s in range(NSTRIP):
-        for r in range(ROWS):
-            v = 0
-            for i, on in enumerate(scr[r, s * STRIP:(s + 1) * STRIP]):
-                if on: v |= 1 << (31 - i)
-            out += struct.pack('>I', v)
-    return bytes(out)
+    """frame -> the boot ROM's LCD RAM image (32 rows x 24 bytes, 6 px per byte), frame at LCD x X0.
+    (Until v0.7f this was 6 blits of 22 px strips; the blit reads 7 px per byte, so every 8th pixel was lost.)"""
+    import gfxlib
+    return b''.join(gfxlib.pack6(scr[r], X0) for r in range(ROWS))
 
 
 def build(base, prologue=None):
@@ -62,18 +59,13 @@ def build(base, prologue=None):
     a.label('anim')
     if prologue: prologue(a)
     a.mov_l_imm('anim_table', 4)
-    a.mov_l_imm(BLIT, 5)
     a.label('an_next')
     a.mov_l_ind(4, 6)                        # er6 = frame (0 = end)
     a.beq16('an_done')
-    for s in range(NSTRIP):
-        a.sub_l(0, 0); a.push_l(0)           # stack arg 0, as stock
-        a.mov_l_rr(6, 1)
-        if s: a.add_l_imm(s * ROWS * 4, 1)
-        a.mov_w_imm((STRIP << 8) | ROWS, 8)  # e0 = width, rows
-        a.mov_b_imm(0, 'r0h'); a.mov_b_imm(X0 + s * STRIP, 'r0l')
-        a.jsr_ind(5)
-        a.adds4(7)
+    a.mov_l_from_abs(0x401EC4, 5)            # LCD dot rows (boot ROM pointer), streamed to the LCD by interrupt
+    a.mov_w_imm(ROWS * 24 // 4, 2)           # copy 768 bytes as longs
+    a.label('an_copy')
+    a.mov_l_ind(6, 0); a.mov_l_st(0, 5); a.adds4(6); a.adds4(5); a.dec_w1(2); a.bne('an_copy')
     a.mov_w_disp(4, 4, 6)                    # r6 = ticks
     a.label('an_wait')
     a.mov_l_imm(TICK, 0); a.jsr(DELAY)

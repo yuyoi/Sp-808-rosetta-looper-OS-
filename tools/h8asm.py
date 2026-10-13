@@ -101,6 +101,7 @@ class Asm:
     def mov_b_st(self, reg, ptr): self._b(0x68, 0x80 | (ptr << 4) | R8[reg])            # mov.b rs,@erp
     def mov_b_ldinc(self, ptr, reg): self._b(0x6C, (ptr << 4) | R8[reg])                # mov.b @erp+,rd
     def mov_b_ld_disp(self, disp, ptr, reg): self._b(0x6E, (ptr << 4) | R8[reg], (disp >> 8) & 0xFF, disp & 0xFF)
+    def mov_b_st_disp(self, reg, disp, ptr): self._b(0x6E, 0x80 | (ptr << 4) | R8[reg], (disp >> 8) & 0xFF, disp & 0xFF)
     def mov_l_st(self, src, ptr): self._b(0x01, 0x00, 0x69, 0x80 | (ptr << 4) | src)    # mov.l ers,@erp
     def mov_l_ld_disp(self, disp, ptr, dst): self._b(0x01, 0x00, 0x6F, (ptr << 4) | dst, (disp >> 8) & 0xFF, disp & 0xFF)
     def mov_l_st_disp(self, src, disp, ptr): self._b(0x01, 0x00, 0x6F, 0x80 | (ptr << 4) | src, (disp >> 8) & 0xFF, disp & 0xFF)
