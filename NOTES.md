@@ -92,6 +92,25 @@ Logical key codes:
 
 ## NEXT (after v0.9): hw test of the looper; then MIDI control for it; then keyboard mode (must be poly)
 
+## Keyboard (piano) mode + max polyphony: research (2026-10-13)
+- **Max poly = 4.** The kernel voice allocator 0x1000A6(pad flags) hands out 4 playback channels:
+  state 0x403302 + ch (0x96 = idle), flags 0x40330A + ch (bits 4-6 = voice group, same group steals:
+  pad flags bits 4-6), busy masks 0x40330E | 0x40330F; full: steal by priority (0x1002A6). Mono or stereo,
+  a sample takes one channel. DSP0's 10 stream blocks = 4 stereo playback pairs + 2 record, so 8 mono
+  voices would need kernel streaming + DSP0 microcode work (DSP0 is 757/768 words, ISA undocumented).
+- **No per-voice pitch.** VARI (key 0xF1, params BPM TUNE / BPM RATE / VARI PITCH, table 0x166CF0) is a
+  global rate: 0x14603C -> rate per mille @0x43B326 (1000 = normal) -> kernel 0x100630 turns it into a
+  period (587000 / rate at 44.1 kHz, 625000 / rate at 32 kHz, clamped) at 0x403310 and sets 0xFFFEA4
+  bit 0: the whole unit's sample clock changes (song, pads, recording). The DSP plays every channel 1:1.
+- **CHANGE PITCH (screen 0x58, SHIFT+LEVEL) can make pitched copies:** source bank/pad 0x42769C/D ->
+  to 0x42769E/F, params at 0x42774A grade 0-4, 0x42774B semitones -12..+12, 0x42774C fine -100..+100
+  (descriptors 0x165B28..). Core 0x123810(er0 source entry, er1 dest entry, stack: grade, semis, fine)
+  sets up DSP1 (0x11B6C0 loads the pitch shifter, 0x11F2AE mixer params) and bounces the pad through it in
+  real time: length kept, DSP pitch-shifter quality. semis = fine = 0 just copies the entry (0x13AFF2).
+  Callback 0x13AFA2 then writes the result pad.
+- **So poly keyboard = 16 pre-pitched copies on 16 pads, 4 notes at once.** True resampled pitch exists
+  only as the global VARI clock (mono use only).
+
 ## v0.9b (2026-10-13): looper fixes after the first hw test, debug trace
 - **v0.9 on hw:** layer 1 fine; at the end of layer 2 it fell into Roland's SAMPLING setup (0x20),
   loop 1 stopped, "Finished." popped up, everything felt slow.
