@@ -90,6 +90,17 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
+## v0.6h (built 2026-10-13): MPC page rework, CLASSIC = replace, pad-pick debug
+- **v0.6g on hw:** the CLASSIC take stayed on the take pad T (pad 1) after hitting pad 13. "BANK FULL" after one take is real: the bank was full of old test takes.
+- **Swap code checked:** the bytes match the design, and PAD_GET/SET for the current bank (@0x40323C) are plain 32-byte copies to/from 0x4225B4 + 32·pad. So either the pad hit never reached g1, or something rewrote T afterwards.
+- **Key dispatcher 0x13F2F0:** it skips a group handler when the group's bit is set in the mask 0x427906 (setter 0x13F2E8), and the key then goes to the screen as event 9. 0x13AC1C sets 0x0002 (pads masked). The sampling screens don't touch the mask.
+- **Screen events:** 0 = enter, 1 = leave, 2 = shown (sent once at the end of the commit, 0x13FB32 → 0x13F18E), 9 = key, 6 = idle. 0x23 event 2 writes the take into T = 0x4277C8 (bank 0x4277C7).
+- **Take-preview vtable 0x166342:** a pad press plays pad 0x4277C8 (0x13735E), whichever pad you hit.
+- **CLASSIC now:** T = first free pad, or pad 16 when the bank is full. T's entry is saved (RAM +0x20) before the take. On a pad hit P: P ← take, T ← saved entry. P == T means it stays.
+- **Pad hits are caught in both g1 and w23 event 9.** Debug line on the MPC page: `<G|W|E> T<t0>/<t> P<p> <K|k|S|F|N|C|->`.
+- **MPC page:** UP/DOWN picks the line, </> changes it, ENTER = take. SAMPLE on the MPC page = take, anywhere else = open the MPC page.
+- **Guards:** our mode keys and PAD SAMPLING do nothing during our take. Before this, PAD SAMPLING on 0x22 (flags 0x0800, bit 7 clear) started a second take. PAD SAMPLING on screens 0x1F-0x24 goes to stock.
+
 ## v0.6g (2026-10-13, on the SD): CLASSIC MPC at power-on
 - **v0.6f on hw:** lands on the MPC page after every take, no "RAM!", so the RAM move works.
 - But the clean boot init made NEXT FREE (mode 0) the default. The old builds only started in CLASSIC because pool record #445's prev link (0x01BC) left 0x01 in SMODE.
