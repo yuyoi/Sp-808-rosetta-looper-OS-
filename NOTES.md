@@ -135,6 +135,76 @@ Logical key codes:
   song's PADBANK_VS2 file). PAD_GET/PAD_SET on another bank go through the disk buffer 0x421B80
   (0x122B26 read), so a scratch bank can be filled without switching.
 
+## v1.0 (2026-10-13, built + emulator-tested, NOT on hw): KEYS = 8-voice pitched sampler running in the FX chip
+
+The "4 voices" wall was DSP0's. The effects core (DSP1) is free to reprogram, so KEYS mode loads **our own DSP
+program** there: the pads play one sample held in the FX delay RAM, 8 voices, pad 8 = root, -7..+8 semitones.
+Files: `tools/esp.py` (decoder, disassembler, cycle simulator), `tools/dspdump.py` (programs out of the image),
+`tools/fxcapture.py` (runs the stock FX loader in the H8S emulator, dumps the live programs with all runtime writes),
+`tools/keysdsp.py` (our DSP1 program + model test), `tools/build_v10.py`, `tools/test_v10.py` (firmware driving the
+DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
+
+### The chip: Roland/Toshiba ESP2 (TC170C140 class), two cores
+- DSP0 (window 0xC00000) = core 0, DSP1 (0xC01000) = core 1. Only core 1 reaches the external delay RAM.
+- Instruction set decoded publicly by The Usual Suspects for their JP-8000 emulator (gearmulator, GPL; we only read
+  it, our tools are independent): 768 words per core, **28-bit words** `EEEEE PPPPP MMMMMMMM SS CCCCCCCC`:
+  E = ERAM slot (bits 27-23), P = opcode (`(w >> 16) & 0x7C`), M = IRAM/GRAM address (256 words, relative to a
+  pointer that decrements once per sample: a value written at m is read next sample at m+1), S = shift after the
+  24x8 multiply (0->7 1->6 2->5 3->3), C = signed 8-bit coefficient. Two 30-bit accumulators (A/B); a store sees the
+  accumulator value from **3 instructions earlier**. op 0x30 multiplies by one of 8 24-bit `mulcoeff` registers
+  (mc6 = the ERAM variable-offset fraction); op 0x34 is the special group (mem 0xA0.. `mcN = acc`, 0xC6 DMAC = the
+  low 7 coefficient bits of a 15-bit pair, 0xC7 `eramvar = acc`, 0xCA `hostreg = acc`, 0xCB `eramwr = acc`,
+  0xCC-0xCF `i[0xFC..0xFF] = eramrd`, 0xD0-0xD3 jumps). Full semantics: `esp.py`.
+- In the OS image a word is 3 bytes **coefficient byte first**; the loader (0x1096D2) writes `b0<<24|b1<<16|b2<<8`
+  to the host port, so bits 27-24 (ERAM slot high bits) can only be set with the host's ERAM-group write.
+- Host port modes = latch byte 0x411B65 -> 0xC02003, bits 1-0: 0 raw word write (0x1088C0 / loader), 1 coefficient
+  pair (0x108A5C: one 32-bit write updates a 15-bit coefficient split over two words), 2 ERAM group (0x108B64: one
+  write sets the 5-bit E fields of 5 words = mode + 20-bit offset; 0x109696 packs a WRITE, 0x10965A a READ),
+  3 readback (0x1098DA). 0x108936 = coefficient byte + shift of one word (e0 = coef << 8 | shift sel). Bit 4 = run.
+- Readback: the DSP's `hostreg` value appears in 4 bytes at 0xC00004-7 (the OS reads them with 0x109964).
+- **Delay RAM = 128K words** (the OS's clear routine 0x10861E writes 115 blocks spaced 1140 words), 16-bit
+  block-float compressed. Transactions: the slot word starts it (0x10 write at pos+imm, 0x08 read at pos+imm, 0x18
+  read at pos + (eramvar >> 12) + imm bit 1), the next 4 words carry the 20-bit offset in 5-bit pieces, the data is
+  latched at start+10; a new transaction may start every 6 words. `pos` decrements once per sample (a delay line).
+- I/O of the DSP1 program: Roland's 58-word base reads the FX send in g[0x71]/g[0x75], feeds the algorithm through
+  i[0x12]/i[0x18] (after the wet ramp i[0x10]/i[0x16]: words 0x1D/0x2B are the OS's mute, 0xF800/0x0100), takes
+  its output from i[0x13]/i[0x19] and writes g[0x72]/g[0x76]. The algorithm sits at word 0x3C. After every load the
+  OS puts `JMP 0xF1` at word 0x2F2 (DSP0's own program has it too): we keep words 0xF1-0xFF as nops to be safe.
+- The 20 FX algorithms (order 0 = Isolator&Filter .. 19 = Analog Synth) decode cleanly; the pitch shifter (12)
+  uses exactly the variable-offset read pairs (+0/+1, fraction = crossfade) our sampler needs.
+
+### Our DSP1 program (keysdsp.py), 0x3C-0x4F globals + 0x100-0x26E voices and mixer
+- AGE += 256 per sample (16.8 fixed point, wraps at 65536 samples). Recording writes (inL+inR)/2 at offsets 0
+  **and 0x10000** every sample (two copies make the 16-bit wrap consistent); the host switches the two write groups.
+- Voice: PHI += DELTA (= 256 * ratio, three coefficient fields: *512, *8, /8), X = AGE - PHI (raw, wrapping),
+  eramvar = 16 X, two reads (+0/+1) interpolated with the fraction, level one-pole smoothed from a target
+  coefficient (zipper-free, ~1.5 ms), OUT = sample * level. Host resets a phase by writing its gain field 0 for a pass.
+- Detector: leaky peak of |input|, saturated, to hostreg (all ones while the pad sounds) -> the host starts the
+  age/recording at the real onset instead of at note-on (the disk start latency would otherwise be recorded).
+- Limits of v1: sample <= 65536 samples (1.49 s at 44.1 kHz), pitch step 1/256 sample/sample (<= 7 cents at -7),
+  8 voices (11-12 would fit), release = the level smoothing only.
+
+### Host (build_v10.py): KEYS page (SYSTEM / KEYS tile)
+- Entering: load our program (0x1096D2 chip 1 from 0x3C, 708 words from the table at 0x1B8000), set the ERAM groups
+  and coefficients, `@0x403000 = 0xFFFF` so the stock FX engine reloads its algorithm later, then route the master
+  through the FX: `0x11F2AE(r0 = 7, e0 = 0, r1 = 0x0C)` (= FX LOCATION "INS MASTER"; codes from the table at
+  0x164D38: 0x01 send/return, 0x0C master, 0x0D record, 0x0E aux, 0x0A/0x0B mic, 0x02-0x09 track A-D pre/post,
+  0x00 off; the current code is @0x4031B6). Restored on EXIT.
+- IDLE: LEFT/RIGHT or a pad picks the source pad (it plays through, `thru` fields on). ENTER: pad length from the
+  pad entry (capped 1480 ms + 40), both write groups on, pad note-on; WAIT polls the readback bytes for the onset,
+  then age reset (one pass), REC until the length is up, writes off, pad stopped -> PLAY.
+- PLAY: pad press = next voice round robin (pitch table `ratio_tab`, 3 values per pad), gain 0 + level 0, and a ms
+  later gain 1 + level 48 (`keys_idle`); release = level 0. Pad map shows sounding pads.
+- Boot animation moved to 0x1A0000 (our code is 23.5 KB now); DSP table at 0x1B8000.
+- Tests: `keysdsp.py` (model: 1 kHz recorded, ratios 1 / 1.498 / 0.5 / 1.5 -> 1002 / 1498 / 504 / 1500 Hz, detector
+  fires 1 sample after onset), `test_v10.py` (firmware + model: load 46 writes, routing 7/0/12, onset, 639 ms take,
+  root 1000.4 Hz, +7 1499.7 Hz, -7 664.5 Hz, release, chord, exit restores routing 1).
+- Hardware unknowns: the ESP model itself (from a published bit-exact emulator of another product), the readback
+  byte layout (we test the low nibble of all 4 bytes), whether the master insert really carries the pads, the
+  JMP 0x2F2 cycle budget. If KEYS stays silent: check FX LOCATION / FX on, then the readback.
+- Sources: gearmulator `source/ronaldo/custom_chips/esp/esp.hpp` (dsp56300/gearmulator), the A to Synth blog
+  "A deepdive into the JP8000 and TC170C140 ESP" (2026-02), 39C3 talk "From Silicon to Darude Sand-storm".
+
 ## v0.9b (2026-10-13): looper fixes after the first hw test, debug trace
 - **v0.9 on hw:** layer 1 fine; at the end of layer 2 it fell into Roland's SAMPLING setup (0x20),
   loop 1 stopped, "Finished." popped up, everything felt slow.
