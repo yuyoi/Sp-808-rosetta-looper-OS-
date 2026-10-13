@@ -49,8 +49,9 @@ def pack(scr):
     return bytes(out)
 
 
-def build(base):
-    """-> (blob, labels) for the player + frame data, assembled at base"""
+def build(base, prologue=None):
+    """-> (blob, labels) for the player + frame data, assembled at base.
+    prologue(asm): optional code run once at boot before the animation (e.g. init our RAM)."""
     steps = frames()
     uniq, idx, table = [], {}, []
     for scr, ticks in steps:
@@ -59,6 +60,7 @@ def build(base):
         table.append((idx[b], ticks))
     a = Asm(base)
     a.label('anim')
+    if prologue: prologue(a)
     a.mov_l_imm('anim_table', 4)
     a.mov_l_imm(BLIT, 5)
     a.label('an_next')
@@ -92,9 +94,9 @@ def build(base):
     return blob, a.labels
 
 
-def patch(img, base):
+def patch(img, base, prologue=None):
     """write the player + frames at base (must be empty flash) and hook the stock routine"""
-    blob, labels = build(base)
+    blob, labels = build(base, prologue)
     off = base - 0x100000
     assert not any(img[off:off + len(blob)]), 'boot anim target flash not empty'
     img[off:off + len(blob)] = blob

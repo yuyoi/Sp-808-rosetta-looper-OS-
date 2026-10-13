@@ -90,6 +90,23 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
+## v0.6f (built 2026-10-13): our RAM moved out of the stock event pool (IMPORTANT)
+- **v0.6e on hw:** still dropped to "mode select" after a take.
+- **Real bug since v0.4:** our block lived at 0x42BFF0.
+  - Pool 0x427A6E is 2000 × 40-byte records (init 0x143566: count 0x7D0 → 0x427A4A; per record: prev word +0, next word +2, type byte +4, 0x10 = free). It runs to 0x43B2EE.
+  - The startup zero loop only goes to 0x42BFFF, which misled us.
+  - Our bytes sat inside records #444/#445:
+    - The OS overwrote our canary, so ramcheck reset everything to the HOME page and NEXT FREE.
+    - We overwrote #445's links and type byte (corrupt free list).
+- **C runtime section table at 0x12670E:**
+  - .data: ROM 0x16A9E6 → RAM 0x403000, size 0x2D9.
+  - .bss: 0x4032DA, size 0x38826, so it **ends at 0x43BB00**.
+  - No stock code references 0x43BB00..0x43FFF7. The PRG loader starts at 0x43FFF8, and sample RAM is 0x440000+.
+- **New block:** 0x43C000 (canary + 8 vars).
+  - Not cleared at boot, so the boot-anim player initialises it (bootanim.patch(..., prologue)).
+  - The stack location is still unknown (set by the boot ROM). If it sits just under 0x440000 it would need to be 16 KB deep to reach us; the canary is the tripwire.
+- If a song acts strangely, suspect pool damage from v0.4-v0.6e and use the SD backups.
+
 ## v0.6e (2026-10-13, on the SD): second-take fix
 - **v0.6d on hw:** the first CLASSIC take + pad swap worked. After that it looped through the menus and never reached the record screen.
 - **Cause:** word bit 6 of 0x4277D0 ("take done", set by 0x23 event 2) stays set.
