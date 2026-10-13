@@ -196,6 +196,10 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - PLAY: pad press = next voice round robin (pitch table `ratio_tab`, 3 values per pad), gain 0 + level 0, and a ms
   later gain 1 + level 48 (`keys_idle`); release = level 0. Pad map shows sounding pads.
 - Boot animation moved to 0x1A0000 (our code is 23.5 KB now); DSP table at 0x1B8000.
+- Build 1101 (2026-10-13): **DSP monitor line** on the KEYS page, tiny font at y = 20: `S<state> R<fx route code>
+  <readback bytes 0xC00004..7>`, e.g. `S4 R0C 7F 7F 7F 7F`; redrawn 4x a second (not while waiting for the onset,
+  so the onset latency stays one main-loop pass). On the first hardware test read it off the screen: R must be 0C
+  on the page (01 after EXIT), the readback should move with the pads' audio (0F low nibbles = sound).
 - Tests: `keysdsp.py` (model: 1 kHz recorded, ratios 1 / 1.498 / 0.5 / 1.5 -> 1002 / 1498 / 504 / 1500 Hz, detector
   fires 1 sample after onset), `test_v10.py` (firmware + model: load 46 writes, routing 7/0/12, onset, 639 ms take,
   root 1000.4 Hz, +7 1499.7 Hz, -7 664.5 Hz, release, chord, exit restores routing 1).

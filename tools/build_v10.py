@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1100, '1.0'
+VERSION, VER_TXT = 1101, '1.0'               # 1101 = 1.0 + DSP monitor line on the KEYS page
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -316,6 +316,7 @@ DBGTXT = RAM_BASE + 0x200                   # 40 bytes
 KSTATE, KSRC, KLOADED, KROUTE, KNEXT = (RAM_BASE + 0x240 + i for i in range(5))
 VPAD, VSTATE = RAM_BASE + 0x248, RAM_BASE + 0x250                   # per voice: pad (0xFF free), state 0-3
 KREC_T0, KREC_MS, KTICK = (RAM_BASE + 0x260 + 4 * i for i in range(3))
+KDRAW_T, KDIAG = RAM_BASE + 0x26C, RAM_BASE + 0x270                 # last periodic redraw (ms); 24-byte monitor text
 RAM_VARS = (PAGE, CUR, WARN, MSTATE, REC_PAD, REC_HOLD, MSG, MCUR, D_PATH, D_T0, D_T, D_P, D_RES, SAVED_OK, GMODE,
             BOOTSND, SEG_PG, PEAK, PEAK_HOLD, HIST_N, HIST_CNT, HIST_MAX, METER_N,
             LSTATE, LOOPTAKE, NLAYER, LP_DISCARD, LPEND, LRUN, LMSG, LPRESSED, LST_AT_PRESS,
@@ -684,7 +685,17 @@ def build():
     D.text(1, 27, 's_khelp', 'font_tiny'); a.bra16('dk_grid')
     a.label('dk_rec'); D.text(1, 11, 's_ksamp'); D.text(1, 27, 's_kwait', 'font_tiny'); a.bra16('dk_grid')
     a.label('dk_play'); D.text(1, 11, 's_kplay'); D.text(1, 27, 's_kphelp', 'font_tiny')
-    a.label('dk_grid')                                    # 4x4 map: filled = a voice plays that pad / the source
+    a.label('dk_grid')
+    # DSP monitor line (tiny): "S<state> R<fx route> <readback 0..3>" - the first hardware test reads this off the screen
+    def kputc(ch): a.mov_b_imm(ord(ch), 'r0l'); a.mov_b_st('r0l', 1); a.adds1(1)
+    a.mov_l_imm(KDIAG, 1)
+    kputc('S'); a.mov_b_from_abs(KSTATE, 'r0l'); a.add_b_imm(0x30, 'r0l'); a.mov_b_st('r0l', 1); a.adds1(1)
+    kputc(' '); kputc('R'); a.mov_b_from_abs(FX_ROUTE_CODE, 'r0l'); a.bsr16('hex2')
+    for k in range(4):
+        kputc(' '); a.mov_b_from_abs(DSP_READBACK + k, 'r0l'); a.bsr16('hex2')
+    a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+    D.text(1, 20, KDIAG, 'font_tiny')
+    # 4x4 map: filled = a voice plays that pad / the source
     for p in range(16):
         x, y = GRID_X + (p % 4) * 7, GRID_Y + (3 - p // 4) * 7
         on, nx = uniq('ko'), uniq('kn')
@@ -799,6 +810,12 @@ def build():
     a.label('ks_out'); a.rts()
 
     a.label('keys_idle')                       # every main-loop pass while on screen 5
+    a.mov_b_from_abs(KSTATE, 'r0l')            # monitor line: redraw 4x a second, except while waiting for the onset
+    a.cmp_b_imm(KS_WAIT, 'r0l'); a.beq('ki_st'); a.cmp_b_imm(KS_REC0, 'r0l'); a.beq('ki_st')
+    on_keys_page('ki_st')
+    k_since(KDRAW_T); a.cmp_l_imm(250, 0); a.bcs('ki_st')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, KDRAW_T); a.bsr16('draw')
+    a.label('ki_st')
     a.mov_b_from_abs(KSTATE, 'r0l')
     a.cmp_b_imm(KS_WAIT, 'r0l'); a.beq('ki_wait')
     a.cmp_b_imm(KS_REC0, 'r0l'); a.beq16('ki_rec0')
