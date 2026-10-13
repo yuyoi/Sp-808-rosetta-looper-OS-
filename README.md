@@ -3,7 +3,7 @@
 # SP-808 Rosetta Looper OS
 
 > **Runs on real hardware.** Custom firmware boots on a real Roland SP-808(EX) and installs straight from a Zip or
-> ZuluIDE SD card: Roland-chan boot animation, own home menu, one-press pad sampling. See [Status](#status-2026-10-13).
+> ZuluIDE SD card: Roland-chan boot animation, own home menu, MPC-style pad sampling. See [Status](#status-2026-10-13).
 
 Goal: turn the Roland SP-808 Groove Sampler into a **guitar looper / MPC-style sampler**. The groove/song UI comes
 out, the sampler stays, and three modes get their own buttons: **MPC** (pad sampling), **Looper** (layers, overdub,
@@ -21,10 +21,15 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
   table, key groups), LCD/boot-ROM API, buttons, faders, knobs, D-Beam and footswitch ADC channels are mapped in the docs.
 - **Roland-chan boot animation** (replaces the S-P-8-0-8 slide and the second Groove Sampler splash): she slides up,
   blinks, smiles, then "JSW OS" and "ROSETTA" type in.
-- **Own home menu** (SAMPLE = MPC, SONG = Looper, SYSTEM = Keyboard, SHIFT+SYSTEM = stock system menu).
-- **MPC mode:** PAD SAMPLING records in one press, any pad stops. Sample modes NEXT FREE / CLASSIC / TAP / HOLD,
-  start INSTANT or WAIT SIGNAL, KEEP (ENTER) / RETRY (EXIT) after each take. **CLASSIC works like a real MPC:** record
-  first, then hit the pad the sample should go on (whatever was there moves to the free pad, nothing is lost).
+- **Own home menu** (SAMPLE = MPC, SONG = Looper, SYSTEM = Keyboard, SHIFT+SYSTEM = stock system menu). The VALUE
+  dial and the cursor keys both work in it.
+- **MPC mode** (MPC page: Pad / Rec / Start):
+  - **CLASSIC (default), like a real MPC:** hit a pad to select it (the page shows its number and whether it's used),
+    then ENTER, SAMPLE or PAD SAMPLING records into it.
+  - Any pad stops the take.
+  - On the result screen: ENTER keeps the take, another pad moves it there (the selected pad goes back to how it was).
+  - Other modes: NEXT FREE (first empty pad), TAP / HOLD (SHIFT+pad records into that pad). Start INSTANT or WAIT
+    SIGNAL.
 
 ## Open questions
 
@@ -42,8 +47,8 @@ and is not in this repo. Unzip `SP808#1.MID` .. `SP808#8.MID` into `upd/`, then:
 ```
 pip install numpy pillow
 python -I tools/decode_upd.py upd sp808_v1050_raw.bin                  # Roland update -> OS image
-python -I tools/build_v06d.py sp808_v1050_raw.bin build_v06d           # -> build_v06d/SP808.PRG
-python -I tools/fat_add.py disk.img build_v06d/SP808.PRG --replace     # put it on your Zip / ZuluIDE image
+python -I tools/build_v06j.py sp808_v1050_raw.bin build_v06j           # -> build_v06j/SP808.PRG
+python -I tools/fat_add.py disk.img build_v06j/SP808.PRG --replace     # put it on your Zip / ZuluIDE image
 ```
 
 On the SP-808: power on with the disk in, answer **YES** to "Update System?", then power-cycle when it asks for
@@ -65,7 +70,7 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v06d.py` | each firmware version as a patch script (v0.6d = current) |
+| `tools/build_v02.py` .. `tools/build_v06j.py` | each firmware version as a patch script (v0.6j = current) |
 | `tools/bootanim.py` | boot animation player + hook; frames from `assets/roland_chan_frames.npz` |
 | `tools/roland_chan.py` | turns the line art into LCD frames (needs the drawing, not included) |
 | `tools/fat_add.py`, `tools/inject_prg.py` | put SP808.PRG on a FAT12/16 disk image (bare volume or MBR) |
@@ -84,13 +89,20 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 ## Status (2026-10-13)
 
 Confirmed on a real SP-808EX with a ZuluIDE (Zip drive emulator):
-- disk install of a modified OS, own home menu (v0.3), one-press PAD SAMPLING into the first free pad (v0.4),
-  Roland-chan boot animation (v0.6b).
-- v0.6d (CLASSIC = real MPC flow, any pad stops a take, second splash removed) is built, not yet tested.
+- Disk install of a modified OS.
+- Own home menu (v0.3).
+- One-press PAD SAMPLING (v0.4).
+- Roland-chan boot animation (v0.6b), with the second splash removed (v0.6c).
+- MPC mode with the select-pad flow and the VALUE dial in the menu (v0.6i).
+
+Also fixed on the way: since v0.4 our RAM sat inside the stock 2000-record event pool, and v0.6f moved it.
+
+v0.6j is built and not yet tested: EXIT while recording or on the result screen cancels the take and returns to
+the MPC page.
 
 ## TODO
 
-- [ ] Test v0.6d on hardware (CLASSIC pad swap).
+- [ ] Test v0.6j on hardware (EXIT cancels a take).
 - [ ] Assignable record button (sampling and looper).
 - [ ] Looper v1: pad layers recording while the others loop, overdub + undo, auto start on signal, footswitch
       (ADC ch 11) and MIDI control, tempo/click, save loops to disk.

@@ -90,7 +90,15 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
-## v0.6i (built 2026-10-13): encoder in our menu, CLASSIC records into the selected pad
+## v0.6j (built 2026-10-13): EXIT cancels a take
+- **User:** EXIT while sampling should stop, not save, and go back to the menu.
+- **Stock 0x22 (record):** event 9 only handles PAD SAMPLING, and only while word bit 3 of 0x42790C is clear (it's set at enter). Event 0x19 also stops. Leave (event 1, 0x13CAB6) calls stop 0x13CB54, unlock 0x13F2DA and 0x14D1C6, then flags &= 0xFF86.
+- **Our EXIT on 0x22:** MSTATE idle, then go to screen 5. The leave stops the recording, 0x23 never runs, and the take is never written to a pad.
+- **Stock 0x23 EXIT:** 0x14D136 + 0x14D078 (stop the take preview, object 0x43B5A6), unlock, then go to 0x20 with the toast "Try Again." via 0x14D30E(0x16632A). The empty-take toast is "Cenceled." (0x166312, Roland's typo). Toast = message pointer 0x43B5E0, frames 0x43B5E4.
+- **Our EXIT on 0x23 (was RETRY):** stop the preview, put the take pad back to its saved entry, KEEP to screen 5, "take canceled".
+- The take pad's entry is now saved in start_rec for every mode.
+
+## v0.6i (2026-10-13, WORKS on hw): encoder in our menu, CLASSIC records into the selected pad
 - **v0.6h on hw:** "it seems to sample now". But ENTER in CLASSIC recorded into a pad the user couldn't see ("show what pad you selected, or say pick one"). The debug line hasn't been reported yet.
 - **Encoder:**
   - Main loop 0x13F0F2: keys 0x13F2F0 → dial 0x13139A (delta → 0x427058) → param edit 0x129260 (via the current param object @0x426D3C, nothing for screen 5) → commit 0x13F9C2.
