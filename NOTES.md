@@ -90,7 +90,34 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
-## v0.6j (built 2026-10-13): EXIT cancels a take
+## v0.7-v0.7f (2026-10-13): own graphics engine, pixel-exact LCD (v0.7f WORKS on hw)
+- **Engine:** tools/gfxlib.py, with fonts and icons in tools/ui_gfx.py. Mockups in art/ (not in the repo) were approved.
+- **Test tools:** tools/h8emu.py (small H8S emulator) and tools/test_ui.py run our draw code on the PC.
+- **On hw, v0.7-v0.7e drew broken pixels:**
+  - 32 px blits sheared.
+  - 22/24 px blits lost every 8th pixel and left stray dots at the seams.
+  - Flag 0x80 is a compressed format.
+  - Stack: in on-chip RAM (SP ≈ 0xFFF914), not near our RAM.
+- **v0.7e dumped the boot ROM** with Roland's own file save:
+  - memcpy API 0x400224 into 0x440000, then save-file 0x10B61A(r0h 0x13, e0 0xFFFF, r0l 0, er1 = 8.3 name, stack: buffer, size).
+  - Output: dump/BOOTROM.BIN (0x000000-0x0FFFFF) and dump/BOOTRAM.BIN (0x400000-0x402FFF). These are Roland data and are never committed.
+  - The SP-808 wrote the directory entry and the data but not the FAT; extract them contiguously.
+- **Boot ROM, LCD side:**
+  - The API jump table at 0x400200 is `jmp` entries into the ROM; the blit is at 0xB074.
+  - **The blit reads its source as 7 px per byte** (bits 7-1; `and.w #0x1FE` into an expand table at 0xAE34). Rows are ceil(w/7) bytes.
+  - Blit flags: rows-byte bit 7 = compressed source (unpacked to 0x401BAA via 0xB2AA); y bit 6 = invert (@0x401EF8); y bit 7 = op 0xB1E6 instead of 0xB1CE.
+- **LCD RAM:**
+  - 0x40187A, 34 rows × 24 bytes, **6 px per byte in bits 5-0** (bit 5 = left; x tables 0xACF4 = x/6, 0xAD7C = 5 - x%6).
+  - Rows 0-1 are the 7-segment / icon line. The dot rows start at @0x401EC4 = 0x4018AA, stride @0x401EBC = 24.
+  - LCD init 0x9DA8; full copy 0xA046; port 0xA00000 = command/status (bit 7 busy), 0xA00001 = data.
+  - The interrupt at 0x9C58 streams the whole image continuously (state machine via @0x401EAE, row counter @0x401EB6 0x80-0xA1, restart @0x401EB8).
+  - So **writing the LCD RAM shows up on its own.**
+- **v0.7f:**
+  - gfx_flush packs the 128 px canvas (LCD x 4-131) into the LCD RAM: 22 bytes per row via nibble shift plus 3-bytes-to-4 six-bit groups; bytes 22-23 are cleared.
+  - Roland-chan frames are stored pre-packed and copied in, so she no longer loses columns.
+  - Boot sound: the first screen-5 idle event plays pad 16 (note-on 0x13735E, r0 = 15, r1l = 127).
+
+## v0.6j (2026-10-13, on hw): EXIT cancels a take
 - **User:** EXIT while sampling should stop, not save, and go back to the menu.
 - **Stock 0x22 (record):** event 9 only handles PAD SAMPLING, and only while word bit 3 of 0x42790C is clear (it's set at enter). Event 0x19 also stops. Leave (event 1, 0x13CAB6) calls stop 0x13CB54, unlock 0x13F2DA and 0x14D1C6, then flags &= 0xFF86.
 - **Our EXIT on 0x22:** MSTATE idle, then go to screen 5. The leave stops the recording, 0x23 never runs, and the take is never written to a pad.
