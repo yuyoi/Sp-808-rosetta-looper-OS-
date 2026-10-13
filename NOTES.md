@@ -110,6 +110,21 @@ Logical key codes:
   Callback 0x13AFA2 then writes the result pad.
 - **So poly keyboard = 16 pre-pitched copies on 16 pads, 4 notes at once.** True resampled pitch exists
   only as the global VARI clock (mono use only).
+- **VARI range:** 0x100630 clamps the period to 0x248..0xCA4 at 44.1 kHz (587000 / rate): rate
+  181..1005 per mille, i.e. it can only slow the clock (to about -29.6 semitones), +0.5 % up. At 32 kHz
+  (625000 / rate, clamp 0x1C6..0x9C4) it can go up to about +5.5 semitones. A mono true-pitch mode
+  would bend everything that plays (loops, input, FX) and mostly pitch down.
+- **Per-voice level, for a release:** per channel ch (0-3): 0x43B6C0 level, 0x43B6C4 multiplier
+  (0x80 = unity), 0x43B629 effective = level * mult * 2 >> 8 (0x14F56E), pushed to the DSP by
+  0x135882(r0h ch, r0l strip @0x43B649 + ch, e0 = param mask, 0x1000 = level; table 0x164C54).
+  0x43B631 + ch = owner (0x10 + pad for pads). 0x43B6DC + 4 ch = per-voice callback run by the voice
+  service (0x14F228; non-zero return = recompute + push the level). Stock de-click stop 0x14F4AC: mult 0,
+  push, callback 0x14F436 waits @0x43B6D8 ticks of 0xFFF0E0, then 0x14F504 stops the voice.
+  A release = our callback stepping the multiplier down, then the stock stop.
+- **Banks:** 64 (params 0x42769C/E: 0..0x3F). Current bank @0x40323C; switch = 0x137AFA(bank) (state
+  machine 0x137BF4 saves the old bank if dirty via 0x1220BC, clears the table, loads 0x1220FC from the
+  song's PADBANK_VS2 file). PAD_GET/PAD_SET on another bank go through the disk buffer 0x421B80
+  (0x122B26 read), so a scratch bank can be filled without switching.
 
 ## v0.9b (2026-10-13): looper fixes after the first hw test, debug trace
 - **v0.9 on hw:** layer 1 fine; at the end of layer 2 it fell into Roland's SAMPLING setup (0x20),
