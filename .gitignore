@@ -1,0 +1,27 @@
+# Whitelist: everything is ignored unless listed below.
+# Never commit Roland data (upd/, *.MID, decoded images, built .bin / SP808.PRG) or disk images / SD backups.
+/*
+!/.gitignore
+!/README.md
+!/LICENSE
+!/NOTES.md
+!/MENU_MAP.md
+!/CONTROLS.md
+!/LOOPER_DESIGN.md
+!/tools/
+!/assets/
+
+# derived from Roland's code
+tools/xref.pkl
+tools/__pycache__/
+# work in progress, not built yet
+tools/build_v07.py
+
+*.bin
+*.PRG
+*.prg
+*.img
+*.MID
+*.mid
+*.zip
+*.bak

@@ -1,0 +1,100 @@
+<p align="center"><img src="assets/roland_chan_boot.gif" width="560" alt="Roland-chan boot animation"></p>
+
+# SP-808 Rosetta Looper OS
+
+> **Runs on real hardware.** Custom firmware boots on a real Roland SP-808(EX) and installs straight from a Zip or
+> ZuluIDE SD card: Roland-chan boot animation, own home menu, one-press pad sampling. See [Status](#status-2026-10-13).
+
+Goal: turn the Roland SP-808 Groove Sampler into a **guitar looper / MPC-style sampler**. The groove/song UI comes
+out, the sampler stays, and three modes get their own buttons: **MPC** (pad sampling), **Looper** (layers, overdub,
+footswitch + MIDI) and **Keyboard** (one sound pitched across the 16 pads and a MIDI keyboard). Stretch goal: Doom.
+
+Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler-RosettaRom) (D-110 sample swap and OS mod).
+
+## What works
+
+- **Decode Roland's update** (`SP808v1050.zip`, 8 SMF files of SysEx) into the plain OS image: 7-bit packed data,
+  no compression, no encryption. `decode_upd.py` is bit-exact.
+- **Install from disk:** the OS updates itself from `SP808.PRG` on a FAT12/16 Zip disk. The only checks are a magic
+  byte, a tag and a header copy, **no checksum**. `fat_add.py` puts the file on a Zip / ZuluIDE disk image.
+- **Reverse-engineered H8S OS:** homemade disassembler, xref builder and a small label assembler. UI engine (screen
+  table, key groups), LCD/boot-ROM API, buttons, faders, knobs, D-Beam and footswitch ADC channels are mapped in the docs.
+- **Roland-chan boot animation** (replaces the S-P-8-0-8 slide and the second Groove Sampler splash): she slides up,
+  blinks, smiles, then "JSW OS" and "ROSETTA" type in.
+- **Own home menu** (SAMPLE = MPC, SONG = Looper, SYSTEM = Keyboard, SHIFT+SYSTEM = stock system menu).
+- **MPC mode:** PAD SAMPLING records in one press. Sample modes NEXT FREE / CLASSIC / TAP / HOLD, start INSTANT or
+  WAIT SIGNAL, KEEP (ENTER) / RETRY (EXIT) after each take.
+
+## Open questions
+
+- **Looper engine:** the song engine has no loop/cycle play at all. Pads loop seamlessly, so layers = looping pads is
+  being tested first (stock sampling stops all pads; that call can be hooked out). Notes: `LOOPER_DESIGN.md`.
+- **Real MPC flow for CLASSIC** (record first, pick the pad at KEEP): needs a pad move (`0x122000` assign request, pad
+  clear routine still to find).
+- Recording into a used pad skips the stock "Overwrite?", so the old wave may be orphaned (stock CLEANUP DISK).
+- LCD width: 132 or 136 px (the stock logo is centred on 136). Keyboard mode needs the real-time pitch path.
+- More than 4 voices: the DSP0 voice program fills 757 of 768 words, so it needs DSP microcode work, not an OS patch.
+
+## Use
+
+You must supply Roland's **own update file** (`SP808v1050.zip`, SP-808 OS v1.05). It is Roland's copyrighted code
+and is not in this repo. Unzip `SP808#1.MID` .. `SP808#8.MID` into `upd/`, then:
+
+```
+pip install numpy pillow
+python -I tools/decode_upd.py upd sp808_v1050_raw.bin                  # Roland update -> OS image
+python -I tools/build_v06c.py sp808_v1050_raw.bin build_v06c           # -> build_v06c/SP808.PRG
+python -I tools/fat_add.py disk.img build_v06c/SP808.PRG --replace     # put it on your Zip / ZuluIDE image
+```
+
+On the SP-808: power on with the disk in, answer **YES** to "Update System?", then power-cycle when it asks for
+the Zip. Hold **HOLD** at power-on to force the prompt. **Back up your disk image first.**
+
+**Recovery** (built into the boot ROM, the OS can't break it): power on holding [STATUS] + [EFFECTS] above fader A,
+then play Roland's `SP808#1-8.MID` into MIDI IN.
+
+**Legal:** this repo contains no Roland code. The build scripts patch **your own** decoded image. Please don't share
+the built `SP808.PRG`: share this repo instead.
+
+Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an SP-808EX turns it into a non-EX.
+
+## Files
+
+| File | |
+|---|---|
+| `tools/decode_upd.py` | Roland SMF update -> OS image |
+| `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
+| `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
+| `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
+| `tools/build_v02.py` .. `tools/build_v06c.py` | each firmware version as a patch script (v0.6c = current) |
+| `tools/bootanim.py` | boot animation player + hook; frames from `assets/roland_chan_frames.npz` |
+| `tools/roland_chan.py` | turns the line art into LCD frames (needs the drawing, not included) |
+| `tools/fat_add.py`, `tools/inject_prg.py` | put SP808.PRG on a FAT12/16 disk image (bare volume or MBR) |
+| `NOTES.md` | working notes: update format, flashing, boot combos, function map, every version |
+| `MENU_MAP.md`, `CONTROLS.md` | screen table / key routing map, all buttons, ADC channels, LCD and boot-ROM API |
+| `LOOPER_DESIGN.md` | looper design (BOSS RC-style) and the engine findings |
+
+## Credits and legal
+
+- **Made by JunkSmithWizard (JSW) together with Claude (Anthropic's AI).**
+- Roland-chan is JSW's own drawing (from the Hex Wizard project).
+- Roland, SP-808 and Groove Sampler are trademarks of Roland Corporation. This project is not affiliated with Roland.
+  No Roland code or data is distributed here.
+- MIT licensed (see `LICENSE`).
+
+## Status (2026-10-13)
+
+Confirmed on a real SP-808EX with a ZuluIDE (Zip drive emulator):
+- disk install of a modified OS, own home menu (v0.3), one-press PAD SAMPLING into the first free pad (v0.4),
+  Roland-chan boot animation (v0.6b).
+- v0.6c (any pad stops a take, pads on the result screen keep it, second splash removed) is built, not yet tested.
+
+## TODO
+
+- [ ] CLASSIC = real MPC flow: record first, hit a pad on the result screen to put the sample there.
+- [ ] Assignable record button (sampling and looper).
+- [ ] Looper v1: pad layers recording while the others loop, overdub + undo, auto start on signal, footswitch
+      (ADC ch 11) and MIDI control, tempo/click, save loops to disk.
+- [ ] Keyboard mode: one sample across 16 pads chromatically + MIDI keyboard.
+- [ ] Strip the groove/song screens.
+- [ ] Doom.
