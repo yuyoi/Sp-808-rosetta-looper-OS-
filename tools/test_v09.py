@@ -8,7 +8,8 @@ our code spins (1 ms per 2000 instructions). Checks layer lengths, start phases 
 import os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import h8emu, ui_gfx, gfxlib
-import build_v09 as bm
+import importlib
+bm = importlib.import_module(os.environ.get('LOOPER_BUILD', 'build_v09b'))
 
 DOTS = 0x4018AA
 UNITS_PER_MS = 44.1 / 16
@@ -38,18 +39,24 @@ class Sim:
         s[bm.WAVE_FREE] = note('free')
         s[bm.ENTRY_EMPTY] = lambda e: [e.wb(e.g32(0) + i, EMPTY[i]) for i in range(32)]
         s[bm.PAD_GET] = self.pad_get; s[bm.PAD_SET] = self.pad_set
-        s[bm.PAD_SET_POST] = s[bm.PAD_REFRESH] = s[bm.SMPL_LOCK] = s[bm.SMPL_UNLOCK] = s[bm.PAD_NORMAL] = lambda e: None
+        s[bm.PAD_SET_POST] = s[bm.PAD_REFRESH] = s[bm.PAD_NORMAL] = lambda e: None
+        s[bm.SMPL_LOCK] = lambda e: self.lock(1); s[bm.SMPL_UNLOCK] = lambda e: self.lock(0)
         s[bm.ARM_TRIGGER] = lambda e: None
         s[0x120332] = s[0x11F2AE] = lambda e: None
         s[bm.SELECT_PAD] = lambda e: e.wb(bm.SMP_PAD, e.rb(bm.SEL_PAD))
         s[bm.MEM_CHECK] = lambda e: e.s16(0, 1)
         s[bm.FIRST_FREE_PAD] = lambda e: e.s16(0, next((p for p in range(16) if self.pads[p][:2] == b'\xff\xff'), 0xFFFF))
         s[bm.PAD_USED] = lambda e: e.s16(0, int(self.pads[e.g16(0) & 15][:2] != b'\xff\xff'))
-        s[bm.GOTO_SCREEN] = lambda e: setattr(self, 'pending', e.g16(0))
+        s[bm.GOTO_SCREEN] = self.goto
         s[bm.SEG_POS] = s[bm.SEG_PUT] = lambda e: None
         s[bm.STOCK_SCR22] = self.stock22; s[bm.STOCK_SCR23] = self.stock23
         e.on_step = self.clock
 
+    def lock(self, on):                                  # 0x42790E bit 1 (+ bit 2 with 0x13F2C2)
+        b = self.e.rb(0x42790E); self.e.wb(0x42790E, (b | 2) if on else (b & 0xF9))
+    def goto(self, e):                                   # 0x13FC0E: ignored while locked
+        if self.e.rb(0x42790E) & 2: e.s16(0, 0); self.log.append((round(self.t, 1), 'goto refused', e.g16(0))); return
+        self.pending = e.g16(0); e.s16(0, 1)
     def clock(self, e):
         old = int(self.t); self.t += 1 / 2000
         if int(self.t) != old: e.wl(bm.TICK_MS, int(self.t))
@@ -66,15 +73,18 @@ class Sim:
     def stock22(self, e):
         ev = e.g16(0)
         if ev == 0:                                      # arm: INSTANT -> recording now
-            e.wb(bm.SIG_WAIT_LO, e.rb(bm.SIG_WAIT_LO) | 0x05); e.wb(bm.SIG_STAT, 0)
+            e.wb(bm.SIG_WAIT_LO, e.rb(bm.SIG_WAIT_LO) | 0x05); e.wb(bm.SIG_STAT, 0); self.lock(1)
             self.rec_start = self.t
-        elif ev == 1 and self.rec_start is not None:     # leave without finishing: cancelled take
-            e.ww(bm.TAKE_WAVE, self.wave); self.wave += 1; self.rec_start = None
+        elif ev == 1:                                    # leave: unlock; unfinished = cancelled take
+            self.lock(0)
+            if self.rec_start is not None: e.ww(bm.TAKE_WAVE, self.wave); self.wave += 1; self.rec_start = None
         elif ev == bm.EV_STOCK_FINISH:
             self.take_ms = self.t - self.rec_start; self.rec_start = None
-            self.pending = bm.SCR_DONE
+            self.lock(0); self.pending = bm.SCR_DONE; self.lock(1)
     def stock23(self, e):
+        if e.g16(0) == 0: self.lock(0)
         if e.g16(0) == 2:                                # write the take into SMP_PAD
+            self.lock(1)
             start = 5000 + 100000 * self.wave
             ent = struct.pack('>IIIHBB', start, start + int(self.take_ms * UNITS_PER_MS), start, self.wave, 0x05, 100)
             self.pads[e.rb(bm.SMP_PAD)] = bytearray(ent + bytes(16)); self.wave += 1
@@ -152,6 +162,8 @@ def main(image_path, out):
     sim.key(bm.K_PADSMPL); sim.run(1500); sim.key(bm.K_PADSMPL | 0x4000); sim.run(50)
     print('stop+hold ', sim.state(), 'layers %d, pad 1 empty %s' % (e.rb(bm.NLAYER), sim.pads[0][:2] == b'\xff\xff'))
     shots.append(('after STOP + HOLD = clear', sim.shot()))
+    if hasattr(bm, 'LDEBUG'):
+        e.wb(bm.LDEBUG, 1); sim.call('lp_draw'); shots.append(('ENTER = debug trace', sim.shot()))
     print(ui_gfx.render(shots, out))
 
 

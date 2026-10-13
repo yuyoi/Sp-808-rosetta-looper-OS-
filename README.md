@@ -47,8 +47,8 @@ and is not in this repo. Unzip `SP808#1.MID` .. `SP808#8.MID` into `upd/`, then:
 ```
 pip install numpy pillow
 python -I tools/decode_upd.py upd sp808_v1050_raw.bin                  # Roland update -> OS image
-python -I tools/build_v09.py sp808_v1050_raw.bin build_v09             # -> build_v09/SP808.PRG
-python -I tools/fat_add.py disk.img build_v09/SP808.PRG --replace      # put it on your Zip / ZuluIDE image
+python -I tools/build_v09b.py sp808_v1050_raw.bin build_v09b           # -> build_v09b/SP808.PRG
+python -I tools/fat_add.py disk.img build_v09b/SP808.PRG --replace     # put it on your Zip / ZuluIDE image
 ```
 
 On the SP-808: power on with the disk in, answer **YES** to "Update System?", then power-cycle when it asks for
@@ -70,7 +70,7 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v09.py` | each firmware version as a patch script (v0.9 = current; v0.7b-e are LCD diagnostics) |
+| `tools/build_v02.py` .. `tools/build_v09b.py` | each firmware version as a patch script (v0.9b = current; v0.7b-e are LCD diagnostics) |
 | `tools/gfxlib.py`, `tools/ui_gfx.py` | graphics engine (framebuffer, fonts, icons, LCD packing) and the mockup renderer |
 | `tools/h8emu.py`, `tools/test_ui.py`, `tools/test_v08.py`, `tools/test_v09.py` | small H8S emulator that runs our code on the PC; screen and looper-session tests |
 | `tools/bootanim.py` | boot animation player + hook; frames from `assets/roland_chan_frames.npz` |
@@ -114,8 +114,7 @@ Also fixed on the way: since v0.4 our RAM sat inside the stock 2000-record event
 - [x] 7-segment line: "ROSETTA OS", version, MB left - v0.8.
 - [ ] Assignable record button (sampling and looper).
 - [x] Looper v1 (v0.9, hw test pending): pad layers, overdub + undo/clear, all on PAD SAMPLING (footswitch).
-- [ ] Looper next: MIDI control, auto start on signal, footswitch
-      (ADC ch 11) and MIDI control, tempo/click, save loops to disk.
+- [ ] Looper next: MIDI control, the footswitch jack (ADC ch 11), tempo/click, save loops to disk.
 - [ ] Keyboard mode: one sample across 16 pads chromatically + MIDI keyboard.
 - [ ] Strip the groove/song screens.
 - [ ] Doom.

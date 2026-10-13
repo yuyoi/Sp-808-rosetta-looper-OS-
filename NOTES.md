@@ -92,6 +92,19 @@ Logical key codes:
 
 ## NEXT (after v0.9): hw test of the looper; then MIDI control for it; then keyboard mode (must be poly)
 
+## v0.9b (2026-10-13): looper fixes after the first hw test, debug trace
+- **v0.9 on hw:** layer 1 fine; at the end of layer 2 it fell into Roland's SAMPLING setup (0x20),
+  loop 1 stopped, "Finished." popped up, everything felt slow.
+- **Cause (reproduced in the emulator once the lock was modelled):** 0x13FC0E (go to screen) is ignored
+  while 0x42790E bit 1 (sampling lock) is set. Lock: 0x13F2D0 sets bit 1, 0x13F2C2 sets bits 1-2,
+  0x13F2DA clears them; 0x22 event 0 locks, its leave and the r5=1 epilogue unlock. Stock forces a jump
+  with 0x13FC8A (unlock, switch, relock). Our looper cancel (double tap / hold / EXIT on 0x22) used the
+  plain call: the jump was dropped after our state was reset, so stock carried on.
+- **Commit 0x13F9C2:** loops while current != pending (event 1 old, event 0 new), then CLS, event 5
+  (0x13FBB6), event 2 (0x13F18E). A jump asked for in event 0 is followed in the same commit.
+- Fixes in tools/build_v09b.py (unlock before every looper jump; layer processed on the next 0x23 idle;
+  LOOPTAKE checked first; LOOP page 4 fps). ENTER on the LOOP page shows a trace (see its docstring).
+
 ## v0.9 (2026-10-13, built + emulator-tested, not on hw yet): LOOPER v1 (pad layers)
 - **User chose:** layer looper; control = PAD SAMPLING (their footswitch is wired to it) + a MIDI backend
   (MIDI still to do); keyboard mode later, poly.
