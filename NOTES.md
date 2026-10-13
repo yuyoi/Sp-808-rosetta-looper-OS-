@@ -90,6 +90,17 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
+## NEXT (after v0.7f, 2026-10-13): our own record / result screens, 7-seg line, looper
+- **User wants:**
+  - Record/result screens in our graphics: big timer, live level meter, waveform.
+  - The 7-segment line (LCD RAM rows 0-1 at 0x40187A) to show "rOSEttA", the version and megs left.
+  - Then the looper (own UI).
+- **Record screen 0x22 RE so far:**
+  - **0x13C272 is the level meter.** Two channel records at 0x427838 (L) and 0x42783E (R). Per record: +0 level, +3 peak, +4 word peak-hold countdown (peak cleared when it hits 0). It takes the max of L/R level and peak and redraws only when they change (last shown at 0x4277F8 / 0x4277F9) via 0x131EF0(r0l = level, r0h = peak, er1 = 0x16600A). r0 != 0 forces a reset (0xFF).
+  - **0x13C236** draws icon 0x165F78 with 0x400470 at x = table 0x1643A4[@0xFFF0D4] + 3, y 0x85, after 0x131750(0x0585, 0x1A86). @0xFFF0D4 is an on-chip register; probably the input select or the trigger level. Still to check.
+  - Event 6 also calls 0x14D91E (memory/time left) and 0x14D948(r0h 0x54, r0l 0x43, e0 = @0x426E29 & 2, r1 = no-memory flag): probably the remaining-time display. To RE next.
+- **Plan:** w22/w23 call stock for the logic, then our draw + flush overwrite the whole dot area (our flush rewrites all 22 bytes of every dot row). Throttle redraws on the idle event, because the main loop also streams the disk while recording.
+
 ## v0.7-v0.7f (2026-10-13): own graphics engine, pixel-exact LCD (v0.7f WORKS on hw)
 - **Engine:** tools/gfxlib.py, with fonts and icons in tools/ui_gfx.py. Mockups in art/ (not in the repo) were approved.
 - **Test tools:** tools/h8emu.py (small H8S emulator) and tools/test_ui.py run our draw code on the PC.
