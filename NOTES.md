@@ -90,7 +90,13 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
-## v0.6f (built 2026-10-13): our RAM moved out of the stock event pool (IMPORTANT)
+## v0.6g (2026-10-13, on the SD): CLASSIC MPC at power-on
+- **v0.6f on hw:** lands on the MPC page after every take, no "RAM!", so the RAM move works.
+- But the clean boot init made NEXT FREE (mode 0) the default. The old builds only started in CLASSIC because pool record #445's prev link (0x01BC) left 0x01 in SMODE.
+- **Change:** the boot init and the ramcheck reset set SMODE = CLASSIC. Version 1063.
+- **Stock RAM clear (OS entry 0x126616):** zeroes 0x403000..0x42BFFF, copies .data, sets 0x426CB2, calls 0x126686 and boot 0x11F0AC, then jmp 0x400200. SP is not set in the OS (the boot ROM does it).
+
+## v0.6f (2026-10-13): our RAM moved out of the stock event pool (IMPORTANT)
 - **v0.6e on hw:** still dropped to "mode select" after a take.
 - **Real bug since v0.4:** our block lived at 0x42BFF0.
   - Pool 0x427A6E is 2000 × 40-byte records (init 0x143566: count 0x7D0 → 0x427A4A; per record: prev word +0, next word +2, type byte +4, 0x10 = free). It runs to 0x43B2EE.
