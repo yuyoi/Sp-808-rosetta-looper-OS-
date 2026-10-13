@@ -9,7 +9,7 @@ Stock OS routines are not emulated: every jsr/jmp to an address in `stubs` runs 
 """
 import struct
 
-FLASH, RAM_LO, RAM_HI = 0x100000, 0x400000, 0x440000
+FLASH, RAM_LO, RAM_HI = 0x100000, 0x400000, 0x800000      # RAM incl. sample RAM (size on the unit unknown)
 
 
 class Emu:
