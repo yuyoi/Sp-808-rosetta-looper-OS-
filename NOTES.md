@@ -121,6 +121,15 @@ Logical key codes:
   service (0x14F228; non-zero return = recompute + push the level). Stock de-click stop 0x14F4AC: mult 0,
   push, callback 0x14F436 waits @0x43B6D8 ticks of 0xFFF0E0, then 0x14F504 stops the voice.
   A release = our callback stepping the multiplier down, then the stock stop.
+- **8 voices: dead end (dug 2026-10-13).** DSP0 is organised per kernel channel, 5 channels (4 playback +
+  1 record): per channel one 12-word control block (DSP0 bytes 0x64, 0x98, 0xC8, 0xF8, 0x128 = table
+  0x160058, the "5 x 12" section; 0x120768(ch) writes 0x8003 there on refill via 0x1089C6), two 28-word
+  stream blocks (L/R, the "10 x 28" section) and one 18-word mixer strip (0x5C4 + 0x48 * ch, table 0x1601DE).
+  Stereo is built into each channel; a mono sample still uses the whole channel. Two mono voices per
+  channel would need new control/stream microcode in DSP0 (11 free words, ISA undocumented).
+  Data path: the DSP reads the compressed audio itself; kernel channel records 0x4032DA + 10 ch, request
+  bits 0xFFF0DE, on-chip channel state 0xFFEF34 + 0x30 ch, refill service 0x1225C2 (boot table 0x40036C).
+  TPU5 (0xFFFEA0..) makes the audio clock: TGRA5 = period - 1 (0x11BC7E, from 0x403310 = VARI).
 - **Banks:** 64 (params 0x42769C/E: 0..0x3F). Current bank @0x40323C; switch = 0x137AFA(bank) (state
   machine 0x137BF4 saves the old bank if dirty via 0x1220BC, clears the table, loads 0x1220FC from the
   song's PADBANK_VS2 file). PAD_GET/PAD_SET on another bank go through the disk buffer 0x421B80
