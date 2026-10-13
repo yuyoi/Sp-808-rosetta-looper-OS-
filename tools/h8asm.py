@@ -68,6 +68,7 @@ class Asm:
     def mov_w_disp(self, disp, src, dst): self._b(0x6F, (src << 4) | dst, (disp >> 8) & 0xFF, disp & 0xFF)  # mov.w @(d16,ers),rd
     def sub_l(self, src, dst): self._b(0x1A, 0x80 | (src << 4) | dst)                  # sub.l ers,erd
     def add_l_imm(self, imm, n): self._b(0x7A, 0x10 | n, *struct.pack('>I', imm & 0xFFFFFFFF))
+    def sub_l_imm(self, imm, n): self._b(0x7A, 0x30 | n, *struct.pack('>I', imm & 0xFFFFFFFF))
     def adds4(self, n): self._b(0x0B, 0x90 | n)                                         # adds #4,ern (n=7: sp)
     def dec_w1(self, n): self._b(0x1B, 0x50 | n)                                        # dec.w #1,rn
     def jsr_ind(self, n): self._b(0x5D, n << 4)                                         # jsr @ern

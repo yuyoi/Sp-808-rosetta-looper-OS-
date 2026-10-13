@@ -22,15 +22,14 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 - **Roland-chan boot animation** (replaces the S-P-8-0-8 slide and the second Groove Sampler splash): she slides up,
   blinks, smiles, then "JSW OS" and "ROSETTA" type in.
 - **Own home menu** (SAMPLE = MPC, SONG = Looper, SYSTEM = Keyboard, SHIFT+SYSTEM = stock system menu).
-- **MPC mode:** PAD SAMPLING records in one press. Sample modes NEXT FREE / CLASSIC / TAP / HOLD, start INSTANT or
-  WAIT SIGNAL, KEEP (ENTER) / RETRY (EXIT) after each take.
+- **MPC mode:** PAD SAMPLING records in one press, any pad stops. Sample modes NEXT FREE / CLASSIC / TAP / HOLD,
+  start INSTANT or WAIT SIGNAL, KEEP (ENTER) / RETRY (EXIT) after each take. **CLASSIC works like a real MPC:** record
+  first, then hit the pad the sample should go on (whatever was there moves to the free pad, nothing is lost).
 
 ## Open questions
 
 - **Looper engine:** the song engine has no loop/cycle play at all. Pads loop seamlessly, so layers = looping pads is
   being tested first (stock sampling stops all pads; that call can be hooked out). Notes: `LOOPER_DESIGN.md`.
-- **Real MPC flow for CLASSIC** (record first, pick the pad at KEEP): needs a pad move (`0x122000` assign request, pad
-  clear routine still to find).
 - Recording into a used pad skips the stock "Overwrite?", so the old wave may be orphaned (stock CLEANUP DISK).
 - LCD width: 132 or 136 px (the stock logo is centred on 136). Keyboard mode needs the real-time pitch path.
 - More than 4 voices: the DSP0 voice program fills 757 of 768 words, so it needs DSP microcode work, not an OS patch.
@@ -43,8 +42,8 @@ and is not in this repo. Unzip `SP808#1.MID` .. `SP808#8.MID` into `upd/`, then:
 ```
 pip install numpy pillow
 python -I tools/decode_upd.py upd sp808_v1050_raw.bin                  # Roland update -> OS image
-python -I tools/build_v06c.py sp808_v1050_raw.bin build_v06c           # -> build_v06c/SP808.PRG
-python -I tools/fat_add.py disk.img build_v06c/SP808.PRG --replace     # put it on your Zip / ZuluIDE image
+python -I tools/build_v06d.py sp808_v1050_raw.bin build_v06d           # -> build_v06d/SP808.PRG
+python -I tools/fat_add.py disk.img build_v06d/SP808.PRG --replace     # put it on your Zip / ZuluIDE image
 ```
 
 On the SP-808: power on with the disk in, answer **YES** to "Update System?", then power-cycle when it asks for
@@ -66,7 +65,7 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v06c.py` | each firmware version as a patch script (v0.6c = current) |
+| `tools/build_v02.py` .. `tools/build_v06d.py` | each firmware version as a patch script (v0.6d = current) |
 | `tools/bootanim.py` | boot animation player + hook; frames from `assets/roland_chan_frames.npz` |
 | `tools/roland_chan.py` | turns the line art into LCD frames (needs the drawing, not included) |
 | `tools/fat_add.py`, `tools/inject_prg.py` | put SP808.PRG on a FAT12/16 disk image (bare volume or MBR) |
@@ -87,11 +86,11 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 Confirmed on a real SP-808EX with a ZuluIDE (Zip drive emulator):
 - disk install of a modified OS, own home menu (v0.3), one-press PAD SAMPLING into the first free pad (v0.4),
   Roland-chan boot animation (v0.6b).
-- v0.6c (any pad stops a take, pads on the result screen keep it, second splash removed) is built, not yet tested.
+- v0.6d (CLASSIC = real MPC flow, any pad stops a take, second splash removed) is built, not yet tested.
 
 ## TODO
 
-- [ ] CLASSIC = real MPC flow: record first, hit a pad on the result screen to put the sample there.
+- [ ] Test v0.6d on hardware (CLASSIC pad swap).
 - [ ] Assignable record button (sampling and looper).
 - [ ] Looper v1: pad layers recording while the others loop, overdub + undo, auto start on signal, footswitch
       (ADC ch 11) and MIDI control, tempo/click, save loops to disk.

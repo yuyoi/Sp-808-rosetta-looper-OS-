@@ -1,4 +1,4 @@
-﻿"""Roland-chan on the SP-808 LCD (about 132x32, 1 bit). Built from the Hex Wizard line art.
+"""Roland-chan on the SP-808 LCD (about 132x32, 1 bit). Built from the Hex Wizard line art.
 
 Writes art/rc_candidates.png: framing candidates, scaled up on an LCD-green background.
 """

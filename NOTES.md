@@ -90,6 +90,21 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
+## v0.6d (built 2026-10-13): CLASSIC = real MPC flow
+- `tools/build_v06d.py`, version 1060. v0.6c was never flashed.
+- **CLASSIC:** PAD SAMPLING records at once into the first free pad T.
+  - On the result screen, hit pad P: the entries of T and P are swapped, then KEEP. ENTER = keep on T, EXIT = retry.
+- **Pad entry API** (32-byte entries; r0 = pad<<8 | bank):
+  - get 0x122946(r0, er1 = dst)
+  - set 0x1229C2(r0, er1 = src). Current bank: copy into 0x4225B4 + 32·pad, then 0x123070 updates 0x4221DE[bank]. Other banks go through disk buffer 0x421B80.
+  - memcpy 0x1230A2(er0 = src, er1 = dst, n word on stack), done with eepmov.
+- **Stock screen 0x23 writes the take at event 2:** 0x1229C2(@0x4277C8<<8 | @0x4277C7, &0x4277D8). Then 0x10B8DC(e0 = 0, r0l = 0) and 0x137BC4(1).
+  - 0x137BC4 = refresh bank pads: 0x137B66, then 0x10BA9A(current bank), then 0x10AEDA.
+- **0x122000 is the disk-stream cue, not the pad write.**
+  - Table 0x422176 holds 20 slots of 4 bytes: 16 pads + 4 tracks.
+  - Dirty masks: 0x422130 = pads, 0x422136 = tracks.
+- 0x13C1E8 only stores the take's wave number in 0x4277C4.
+
 ## v0.6c (built 2026-10-13): take-flow fix + no second splash
 - v0.6b confirmed on hw: Roland-chan boots. The user saw the stock Groove Sampler slide disappear.
 - Bug (CLASSIC, INSTANT): hitting another pad before closing the take-result screen jams it.
