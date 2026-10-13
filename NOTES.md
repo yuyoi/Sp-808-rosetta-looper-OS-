@@ -90,6 +90,24 @@ Logical key codes:
   - `--info` lists the volume and root directory.
   - Tested on synthetic FAT16 (MBR + flat) and FAT12 images only. Not yet tested on a real SP-808-formatted image.
 
+## v0.6e (2026-10-13, on the SD): second-take fix
+- **v0.6d on hw:** the first CLASSIC take + pad swap worked. After that it looped through the menus and never reached the record screen.
+- **Cause:** word bit 6 of 0x4277D0 ("take done", set by 0x23 event 2) stays set.
+  - Screen 0x22 enter calls 0x1404F8(3) (transport mode 3 = sampling).
+  - On a group change, sampling-group handler 0x141232 event 2 calls 0x13659A (enter sampling mode) only while bit 6 is clear.
+  - Stock never needs the reset, because its 0x1F/0x20 screens call 0x13659A themselves.
+- **Fix:** bclr #6,@0x4277D1 in start_rec and in KEEP.
+- **Transport modes:** 0x1404F8(mode) moves to the mode's default state (per-idx record bytes at 0x1677B6 + 12·idx).
+  - Mode 0 → state 2 (STOP); mode 3 → state 0x15.
+  - On a screen change the engine clears 0x42790F, then runs hooks from 0x166C24 for every bit still clear:
+    1. 0x1404DC: restore the transport mode. Screen flags bit 12 → base mode @0x42792C, else mode 4.
+    2. 0x137042: normal pad vtable.
+    3. 0x142EB8
+    4. 0x1440FA
+- **Transport state setter:** 0x140572(state); records at 0x1676BC + 10·state.
+  - Leaving a group sends event 1 to that group's handler. Entering a group sends events 0 and 2.
+  - A new state without flag bit 2 calls 0x136534 (leave sampling mode).
+
 ## v0.6d (built 2026-10-13): CLASSIC = real MPC flow
 - `tools/build_v06d.py`, version 1060. v0.6c was never flashed.
 - **CLASSIC:** PAD SAMPLING records at once into the first free pad T.

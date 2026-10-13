@@ -55,6 +55,8 @@ class Asm:
         if isinstance(imm, str): self._b(0x7A, 0x00 | n); self.items.append(('abs32', imm))
         else: self._b(0x7A, 0x00 | n, *struct.pack('>I', imm & 0xFFFFFFFF))
     def btst_imm(self, bit, reg): self._b(0x73, (bit << 4) | R8[reg])
+    def bclr_abs(self, bit, addr): self._b(0x6A, 0x38, *struct.pack('>I', addr & 0xFFFFFF), 0x72, bit << 4)  # bclr #b,@aa:32
+    def bset_abs(self, bit, addr): self._b(0x6A, 0x38, *struct.pack('>I', addr & 0xFFFFFF), 0x70, bit << 4)  # bset #b,@aa:32
     def add_b_imm(self, imm, reg): self._b(0x80 | R8[reg], imm & 0xFF)
     def and_w_imm(self, imm, n): self._b(0x79, 0x60 | n, (imm >> 8) & 0xFF, imm & 0xFF)
     def cmp_b_rr(self, src, dst): self._b(0x1C, (R8[src] << 4) | R8[dst])
