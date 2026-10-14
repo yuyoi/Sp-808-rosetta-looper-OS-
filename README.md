@@ -52,6 +52,19 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
   DETUNE in 1/16 semitones), OCT. SAMPLE 0 =
   pure synth, notes hold while the key is held. The oscillator is a raw 24-bit phase (DDS); pulse and triangle are
   shaped from it with saturation and abs, all in the same DSP instructions per voice.
+- **Built, emulator-tested, waiting for the hardware test (v1.9-v1.93):**
+  - Every text page in a **Classic Mac** style: window, pinstriped title, scrolling list, ENTER = a full-screen
+    submode menu with full names.
+  - **DDS-DSP** tabs: OSCILLATORS, SAMPLE ATTACK (LA: the sample's attack, then the oscillators), ENVELOPES (decay,
+    sustain, filter envelope), MODULATION (LFO: vibrato, tremolo, filter, 4 waves, delay), ARPEGGIATOR (up / down /
+    up+down / random, 60-240 BPM, gate, 1-3 octaves), VOICE MODE (poly, mono with glide, unison).
+  - **ROUTING** tile: Roland's own mixer with presets (DRY, INPUT FX, LOOP FX, MASTER FX, REC FX), the 16 FX
+    locations, levels, pans, FX / AUX sends.
+  - **MFX** tile: the three FX insert slots DSP0 has (Roland uses one), each placeable at 14 mix points, with knobs /
+    D-Beam / footswitch mapping. Level blocks for now; real effects need ears on the unit.
+  - **LAB** tile (hidden hardware): live bars of all 14 analog inputs, any button's factory name, a light show over
+    all 65 LEDs, the 184 unused bits of the 7-segment line (hidden icons?), the input meter on the pads.
+  - KEYS lights the pads of the notes that sound.
 
 ## State in one look
 
@@ -175,6 +188,8 @@ Built and emulator-tested, waiting for the card:
   KEYS lights the pads of the held keys.
 - **v1.92:** DDS-DSP LFO tab (vibrato on oscillators + sample, tremolo, filter; TRIANGLE / SQUARE / SAW / RANDOM,
   0.2-15 Hz, fade-in delay).
+- **v1.93:** arpeggiator (UP / DOWN / UP+DOWN / RANDOM, 60-240 BPM 1/16 steps, gate, 1-3 octaves).
+- **v1.94:** voice modes POLY / MONO (legato, last-note priority, glide) / UNISON (4 detuned voices a note).
 
 ## TODO
 
@@ -188,7 +203,8 @@ Built and emulator-tested, waiting for the card:
 - [ ] Keyboard next: resample the keys' output, stock FX back after KEYS, longer samples, MIDI channel setting.
 - [x] DDS-DSP (v1.8-v1.81, works on hw): saw / pulse + PW / triangle / unison + detune / octave, sample layer.
 - [x] DDS: LA + ENV tabs (v1.9), LFO tab (v1.92: vibrato / tremolo / filter, 4 waves, delay), emulator-tested.
-- [ ] DDS next: voice modes (MONO / UNI-8 / GLIDE / ARP), 2-op FM + wavetable from a sample, VARI PITCH screen rebuild.
+- [x] DDS: ARP (v1.93), voice modes MONO / GLIDE / UNISON (v1.94), emulator-tested.
+- [ ] DDS next: 2-op FM + wavetable from a sample, VARI PITCH screen rebuild, patch memory (save / load DDS settings).
 - [x] ROUTING / LAB / MFX tiles (v1.91, emulator): Roland's mixer, hidden hardware pages, 3 insert slots.
 - [ ] MFX sound: real blocks per slot (filter, delay, crush, ...) with ears on the unit; pads as FX switches / scenes.
 - [ ] Stretch: an animation page with Hex Girl dancing, an uwu face mode and adjustable glitches.

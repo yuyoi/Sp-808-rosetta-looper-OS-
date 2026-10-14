@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1192, '1.92'              # 1.92 = DDS-DSP LFO (1.91: ROUTING / LAB / MFX, Mac page engine)
+VERSION, VER_TXT = 1194, '1.94'              # 1.94 = voice modes MONO / GLIDE / UNISON (1.93 ARP, 1.92 LFO)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -388,6 +388,23 @@ LFO_INC = [round(65536 * hz / 1000) for hz in LFO_HZ]                 # phase (1
 LFO_WAVES = ['TRIANGLE', 'SQUARE', 'SAW', 'RANDOM']
 VIB_CT = [round(d * 100 / 16) for d in range(17)]                     # PITCH depth -> cents (16 = a semitone)
 RATIO_FINE = [keysdsp.delta_fields(2 ** ((k - KEY_LO + f / 16) / 12))[:3] for k in range(NKEYS) for f in range(16)]
+# ARP (v1.93): pads / MIDI notes go to a held list (sorted, up to 8) instead of sounding; a step clock (1/16 notes at
+# TEMPO) plays them one at a time through keys_note_on / keys_note_off, over OCTAVES, with GATE.
+KARP, KARR, KARG, KARO = (RAM_BASE + 0x4C0 + i for i in range(4))     # mode, tempo, gate, octaves
+AHELD, AN, ACUR, AIDX, ADIR, ALVL, AOFF = RAM_BASE + 0x4C8, RAM_BASE + 0x4D0, RAM_BASE + 0x4D1, RAM_BASE + 0x4D2, \
+    RAM_BASE + 0x4D3, RAM_BASE + 0x4D4, RAM_BASE + 0x4D5
+AT, ARND = RAM_BASE + 0x4D8, RAM_BASE + 0x4DC
+ARP_MODES = ['OFF', 'UP', 'DOWN', 'UP+DOWN', 'RANDOM']
+ARP_BPM = (60, 70, 80, 90, 100, 110, 120, 125, 130, 140, 150, 160, 175, 190, 210, 240)
+ARP_STEP = [round(15000 / b) for b in ARP_BPM]                         # ms per 1/16 note
+ARP_GATE = (25, 50, 75, 100)
+# VOICE (v1.94): POLY / MONO (legato, last-note priority, GLIDE) / UNISON (4 detuned voices a note). Every pitch write
+# adds LFO_OFF + GOFF (glide, MONO) + VDET[voice] (unison detune), in 1/16 semitones.
+KVM, KGL, KUS, MV, MHN = (RAM_BASE + 0x4E0 + i for i in range(5))
+MHELD, GOFF, GSTART, GT, VDET = RAM_BASE + 0x4E8, RAM_BASE + 0x4F0, RAM_BASE + 0x4F2, RAM_BASE + 0x4F4, RAM_BASE + 0x4F8
+VM_NAMES = ['POLY', 'MONO', 'UNISON']
+UNI_K = (-3, -1, 1, 3)
+US_TAB = [round(k * sp / 4) for sp in range(16) for k in UNI_K]        # spread -> 4 detunes (1/16 semitones)
 DDS_TABS = [
     ('OSC', [('SAMPLE', KMXS, 0, 16, 'dds_ap0', ('n',)), ('SAW', KMXSAW, 0, 16, 'dds_ap1', ('n',)),
              ('SQUARE', KMXPUL, 0, 16, 'dds_ap2', ('n',)), ('WIDTH', KPW, 1, 15, 'dds_ap3', ('t', 'pw_pct', '%')),
@@ -400,8 +417,13 @@ DDS_TABS = [
              ('FLT ENV', KFENV, 0, 16, None, ('n',)), ('FLT DEC', KFDEC, 0, 15, None, ('o', 'dec_ms', 'MS'))]),
     ('LFO', [('WAVE', KLFW, 0, 3, None, ('s', 'lfo_wn', 4)), ('RATE', KLFR, 0, 15, None, ('s', 'lfo_rn', 16)),
              ('PITCH', KLFP, 0, 16, None, ('t', 'vib_ct', 'C')), ('FILTER', KLFF, 0, 16, None, ('n',)),
-             ('LEVEL', KLFL, 0, 16, None, ('n',)), ('DELAY', KLFD, 0, 15, None, ('o', 'dec_ms', 'MS'))])]
-DDS_DESC = ['OSCILLATORS', 'SAMPLE ATTACK', 'ENVELOPES', 'MODULATION']
+             ('LEVEL', KLFL, 0, 16, None, ('n',)), ('DELAY', KLFD, 0, 15, None, ('o', 'dec_ms', 'MS'))]),
+    ('ARP', [('MODE', KARP, 0, len(ARP_MODES) - 1, 'arp_mode', ('s', 'arp_mn', len(ARP_MODES))),
+             ('TEMPO', KARR, 0, len(ARP_BPM) - 1, None, ('t', 'arp_bpm', 'BPM')),
+             ('GATE', KARG, 0, len(ARP_GATE) - 1, None, ('t', 'arp_gt', '%')), ('OCTAVES', KARO, 1, 3, None, ('n',))]),
+    ('VOICE', [('MODE', KVM, 0, 2, 'vm_mode', ('s', 'vm_nm', 3)), ('GLIDE', KGL, 0, 15, None, ('o', 'la_ms', 'MS')),
+               ('SPREAD', KUS, 0, 15, None, ('n',))])]
+DDS_DESC = ['OSCILLATORS', 'SAMPLE ATTACK', 'ENVELOPES', 'MODULATION', 'ARPEGGIATOR', 'VOICE MODE']
 # Classic Mac style pages (user's pick): window, pinstriped title bar, 3-row scrolling list, values right-aligned;
 # ENTER = the full-screen submode menu
 KDMENU, KDMSEL, KDTOP, KDY = (RAM_BASE + 0x3DC + i for i in range(4))   # menu open, menu cursor, first row shown, row y
@@ -506,7 +528,8 @@ for P_ in MAC_PAGES:
     MAC_STRS += [('s_%si%d_%d' % (P_['pid'], ti, i), it[0]) for ti, (_, items) in enumerate(P_['tabs'])
                  if not isinstance(items, str) for i, it in enumerate(items)]
 MAC_STRS += [('s_lbc%d' % i, n) for i, n in enumerate(LAB_CH_NAMES)]
-MAC_STRS += [('s_lfw%d' % i, n) for i, n in enumerate(LFO_WAVES)]
+MAC_STRS += [('s_lfw%d' % i, n) for i, n in enumerate(LFO_WAVES)] + [('s_arm%d' % i, n) for i, n in enumerate(ARP_MODES)]
+MAC_STRS += [('s_vmn%d' % i, n) for i, n in enumerate(VM_NAMES)]
 MAC_STRS += [('s_lfr%d' % i, ('%g' % hz) + 'HZ') for i, hz in enumerate(LFO_HZ)]
 MAC_STRS += [('s_mfo0', 'OFF'), ('s_mfo1', 'ON')] + [('s_mfc%d' % i, n) for i, n in enumerate(MF_CODE_NAMES)]
 MAC_STRS += [('s_mfg%d' % i, n) for i, n in enumerate(MF_TGTS)]
@@ -1332,6 +1355,8 @@ def build():
 
     a.label('keys_exit')                       # leaving the page: voices off, recording off, routing back
     a.bclr_abs(0, KGATE); set_byte(KACTIVE, 0); set_byte(KBSEL, 0)
+    set_byte(AN, 0); set_byte(ACUR, 0xFF)                                            # the ARP forgets its notes
+    set_byte(MV, 0xFF); set_byte(MHN, 0); a.mov_w_imm(0, 0); a.mov_w_to_abs(0, GOFF)   # and MONO its
     a.bsr16('pads_give')                                                             # the stock's pad LEDs back
     voices_silent()
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.beq('kx_r'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.beq('kx_r')
@@ -1355,7 +1380,7 @@ def build():
     a.mov_b_from_abs(KOCT, 'r0l'); a.mov_b_imm(12, 'r1l'); a.mulxu_b('r1l', 0)                 # r0 = 12 * OCT
     a.mov_b_rr('r4l', 'r1l'); a.extu_w(1); a.add_w_rr(1, 0)                                   # + key = MIDI - 12
     for _ in range(4): a.add_w_rr(0, 0)                                                       # x16 (1/16 semitones)
-    a.mov_b_from_abs(LFO_OFF, 'r1l'); a.exts_w(1); a.add_w_rr(1, 0); a.bpl('kon_p'); a.mov_w_imm(0, 0)   # + vibrato (v1.92)
+    a.bsr16('pitch_off'); a.add_w_rr(1, 0); a.bpl('kon_p'); a.mov_w_imm(0, 0)        # + vibrato / glide / unison
     a.label('kon_p'); a.cmp_w_imm(len(OSC_TAB) // 3 - 16, 0); a.bcs('kon_c'); a.mov_w_imm(len(OSC_TAB) // 3 - 16, 0)
     a.label('kon_c')
     a.extu_l(0); a.mov_l_rr(0, 5); a.add_l_rr(5, 5); a.add_l_rr(0, 5)                         # er5 = index * 3
@@ -1697,17 +1722,218 @@ def build():
     for v in range(NV):                                                                       # every sounding voice
         nx = uniq('ltp')
         a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16(nx)
-        a.mov_l_imm(v, 6); a.mov_b_from_abs(VKEY + v, 'r4l'); a.bsr16('keys_osc_note')        # oscillators
-        a.mov_b_rr('r4l', 'r0l'); a.extu_w(0); for_ = None
-        for _ in range(4): a.add_w_rr(0, 0)                                                   # key * 16
-        a.mov_b_from_abs(LFO_OFF, 'r1l'); a.exts_w(1); a.add_w_rr(1, 0); a.bpl(nx + 'p'); a.mov_w_imm(0, 0)
-        a.label(nx + 'p'); a.cmp_w_imm(len(RATIO_FINE), 0); a.bcs(nx + 'c'); a.mov_w_imm(len(RATIO_FINE) - 1, 0)
-        a.label(nx + 'c'); a.extu_l(0); a.mov_l_rr(0, 5); a.add_l_rr(5, 5); a.add_l_rr(0, 5); a.add_l_rr(5, 5)   # * 6
-        a.mov_l_imm('ratio_fine', 1); a.add_l_rr(1, 5)
-        for tab in ('d2', 'd1', 'd0'):                                                        # the sample
-            a.mov_w_ld(5, 8); a.adds1(5); a.adds1(5); dsp_voice_coef(tab)
+        a.mov_l_imm(v, 6); a.mov_b_from_abs(VKEY + v, 'r4l'); a.bsr16('voice_repitch')        # osc + sample
         a.label(nx)
     a.label('lt_x'); a.pop_l(6); a.pop_l(5); a.pop_l(4); a.rts()
+    # ---- ARP (v1.93) ----
+    a.label('arp_on')                          # r0l = key, r1l = level: ARP off -> straight on; else into the list
+    a.mov_b_from_abs(KARP, 'r1h'); a.cmp_b_imm(0, 'r1h'); a.beq16('vm_on')
+    a.push_l(4); a.push_l(5)
+    a.mov_b_to_abs('r1l', ALVL)
+    a.mov_b_from_abs(AN, 'r4l'); a.mov_b_imm(0, 'r4h')                          # r4h = insert position
+    a.label('ao_f'); a.cmp_b_rr('r4l', 'r4h'); a.beq('ao_ins')                  # sorted insert (skip a repeat)
+    a.mov_b_rr('r4h', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r1h')
+    a.cmp_b_rr('r0l', 'r1h'); a.beq16('ao_x'); a.bcc('ao_ins')                   # held[i] == key: nothing; > key: here
+    a.inc_b('r4h'); a.bra('ao_f')
+    a.label('ao_ins'); a.cmp_b_imm(8, 'r4l'); a.bcc16('ao_x')                    # full
+    a.mov_b_rr('r4l', 'r5l')                                                     # shift [pos .. n-1] up by one
+    a.label('ao_sh'); a.cmp_b_rr('r4h', 'r5l'); a.beq('ao_put')
+    a.mov_b_rr('r5l', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD - 1, 1); a.mov_b_ld(1, 'r1h')
+    a.adds1(1); a.mov_b_st('r1h', 1); a.dec_b('r5l'); a.bra('ao_sh')
+    a.label('ao_put'); a.mov_b_rr('r4h', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_st('r0l', 1)
+    a.inc_b('r4l'); a.mov_b_to_abs('r4l', AN)
+    a.cmp_b_imm(1, 'r4l'); a.bne('ao_x')                                         # the first key: step at once
+    a.mov_l_from_abs(TICK_MS, 0); a.sub_l_imm(10000, 0); a.mov_l_to_abs(0, AT)
+    set_byte(AIDX, 0xFF); set_byte(ADIR, 0)
+    a.label('ao_x'); a.pop_l(5); a.pop_l(4); a.rts()
+    a.label('arp_off')                         # r0l = key: ARP off -> straight off; else out of the list
+    a.mov_b_from_abs(KARP, 'r1h'); a.cmp_b_imm(0, 'r1h'); a.beq16('vm_off')
+    a.push_l(4)
+    a.mov_b_from_abs(AN, 'r4l'); a.mov_b_imm(0, 'r4h')
+    a.label('af_f'); a.cmp_b_rr('r4l', 'r4h'); a.beq16('af_x')
+    a.mov_b_rr('r4h', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r1h')
+    a.cmp_b_rr('r0l', 'r1h'); a.beq('af_rm'); a.inc_b('r4h'); a.bra('af_f')
+    a.label('af_rm')                                                             # shift [pos+1 .. n-1] down
+    a.mov_b_rr('r4h', 'r1l'); a.inc_b('r1l'); a.cmp_b_rr('r4l', 'r1l'); a.beq('af_dn')
+    a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r1h'); a.subs1(1); a.mov_b_st('r1h', 1)
+    a.inc_b('r4h'); a.bra('af_rm')
+    a.label('af_dn'); a.dec_b('r4l'); a.mov_b_to_abs('r4l', AN); a.bne('af_x')
+    a.mov_b_from_abs(ACUR, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq('af_x')        # nothing held: the arp note ends
+    a.bsr16('keys_note_off'); set_byte(ACUR, 0xFF)
+    a.label('af_x'); a.pop_l(4); a.rts()
+    a.label('arp_mode')                        # MODE changed: whatever the ARP plays stops, the list starts empty
+    a.mov_b_from_abs(ACUR, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq('am_x')
+    a.bsr16('keys_note_off'); set_byte(ACUR, 0xFF)
+    a.label('am_x'); set_byte(AN, 0)
+    for v_ in range(NV):                                                         # held notes played directly stop
+        nx_ = uniq('amv'); a.mov_b_from_abs(VPAD + v_, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq(nx_)
+        a.bsr16('keys_note_off'); a.label(nx_)
+    a.rts()
+    a.label('arp_tick')                        # every pass while KEYS plays
+    a.mov_b_from_abs(KARP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('at_x')
+    a.mov_b_from_abs(AN, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('at_x')
+    a.push_l(4); a.push_l(5)
+    a.mov_b_from_abs(KARR, 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_rr(1, 1); a.mov_l_imm('arp_step', 2); a.add_l_rr(2, 1)
+    a.mov_w_ld(1, 5); a.extu_l(5)                                                # er5 = step ms
+    a.mov_l_from_abs(TICK_MS, 4); a.mov_l_from_abs(AT, 0); a.sub_l(0, 4)         # er4 = ms into the step
+    a.mov_b_from_abs(AOFF, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('at_ng')         # gate: the note ends early
+    a.mov_b_from_abs(KARG, 'r1l'); a.cmp_b_imm(len(ARP_GATE) - 1, 'r1l'); a.beq('at_ng')   # 100 %: legato
+    a.extu_w(1); a.extu_l(1); a.add_l_rr(1, 1); a.mov_l_imm('arp_gt', 2); a.add_l_rr(2, 1); a.mov_w_ld(1, 0)   # r0 = gate %
+    a.mulxu_w(5, 0); a.mov_w_imm(100, 1); a.divxu_w(1, 0); a.extu_l(0)          # er0 = gate ms
+    a.cmp_l_rr(0, 4); a.bcs('at_ng')                                             # not yet
+    a.mov_b_from_abs(ACUR, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq('at_ng')
+    a.bsr16('vm_off'); set_byte(ACUR, 0xFF); set_byte(AOFF, 1)
+    a.label('at_ng')
+    a.cmp_l_rr(5, 4); a.bcs16('at_out')                                          # step not over yet
+    a.mov_l_from_abs(AT, 0); a.add_l_rr(5, 0); a.mov_l_to_abs(0, AT); set_byte(AOFF, 0)   # next step: no drift
+    a.sub_l(5, 4); a.cmp_l_rr(5, 4); a.bcs('at_ok')                              # more than a step behind: catch up
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, AT)
+    a.label('at_ok')
+    a.mov_b_from_abs(ACUR, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq('at_nx')      # legato: the last one off now
+    a.bsr16('vm_off'); set_byte(ACUR, 0xFF)
+    a.label('at_nx')
+    a.mov_b_from_abs(AN, 'r4l'); a.mov_b_from_abs(KARO, 'r1l'); a.mulxu_b('r1l', 4)   # r4 = steps in the pattern
+    a.mov_b_from_abs(AIDX, 'r5l'); a.mov_b_from_abs(KARP, 'r0l')
+    a.cmp_b_imm(2, 'r0l'); a.beq('at_dn'); a.cmp_b_imm(3, 'r0l'); a.beq('at_ud'); a.cmp_b_imm(4, 'r0l'); a.beq('at_rn')
+    a.label('at_up'); a.inc_b('r5l'); a.cmp_b_rr('r4l', 'r5l'); a.bcs16('at_go'); a.mov_b_imm(0, 'r5l'); a.bra16('at_go')
+    a.label('at_dn'); a.cmp_b_imm(0, 'r5l'); a.beq('at_dw'); a.cmp_b_imm(0xFF, 'r5l'); a.beq('at_dw')
+    a.cmp_b_rr('r4l', 'r5l'); a.bcc('at_dw'); a.dec_b('r5l'); a.bra16('at_go')
+    a.label('at_dw'); a.mov_b_rr('r4l', 'r5l'); a.dec_b('r5l'); a.bra16('at_go')
+    a.label('at_ud')                                                             # ping-pong (ends not repeated)
+    a.mov_b_from_abs(ADIR, 'r0h'); a.cmp_b_imm(0, 'r0h'); a.bne('at_udd')
+    a.inc_b('r5l'); a.cmp_b_rr('r4l', 'r5l'); a.bcs16('at_go')
+    set_byte(ADIR, 1); a.mov_b_rr('r4l', 'r5l'); a.add_b_imm(0xFE, 'r5l'); a.bpl('at_go')   # turn at the top
+    a.mov_b_imm(0, 'r5l'); a.bra16('at_go')
+    a.label('at_udd'); a.cmp_b_imm(0, 'r5l'); a.beq('at_udt'); a.cmp_b_rr('r4l', 'r5l'); a.bcc('at_udt')
+    a.dec_b('r5l'); a.bra16('at_go')
+    a.label('at_udt'); set_byte(ADIR, 0); a.mov_b_imm(1, 'r5l'); a.cmp_b_rr('r4l', 'r5l'); a.bcs16('at_go')
+    a.mov_b_imm(0, 'r5l'); a.bra16('at_go')
+    a.label('at_rn')                                                             # RANDOM: a 16-bit LCG
+    a.mov_w_from_abs(ARND, 0); a.mov_w_imm(25173, 1); a.mulxu_w(1, 0); a.add_w_imm(13849, 0); a.mov_w_to_abs(0, ARND)
+    a.mov_b_rr('r0h', 'r0l'); a.extu_w(0); a.divxu_b('r4l', 0); a.mov_b_rr('r0h', 'r5l')   # r5l = rnd % n
+    a.label('at_go'); a.mov_b_to_abs('r5l', AIDX)
+    a.mov_b_rr('r5l', 'r0l'); a.extu_w(0); a.mov_b_from_abs(AN, 'r1l'); a.divxu_b('r1l', 0)   # r0l = octave, r0h = index
+    a.mov_b_rr('r0l', 'r1h'); a.mov_b_imm(12, 'r1l'); a.mulxu_b('r1h', 1)          # r1 = 12 * octave
+    a.mov_b_rr('r0h', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_imm(AHELD, 0); a.push_l(1); a.mov_l_rr(0, 1)
+    a.mov_b_ld(1, 'r0l'); a.pop_l(1); a.add_b_rr('r1l', 'r0l')                     # key = held[i] + 12 * octave
+    a.cmp_b_imm(NKEYS, 'r0l'); a.bcc('at_out')                                   # above the top: rest this step
+    a.mov_b_to_abs('r0l', ACUR); a.mov_b_from_abs(ALVL, 'r1l'); a.bsr16('vm_on')
+    a.label('at_out'); a.pop_l(5); a.pop_l(4)
+    a.label('at_x'); a.rts()
+    # ---- voice modes (v1.94) ----
+    a.label('pitch_off')                       # voice r6l -> r1 = LFO_OFF + GOFF + VDET[voice] (signed, 1/16 semitones)
+    a.push_w(0)
+    a.mov_b_from_abs(LFO_OFF, 'r0l'); a.exts_w(0); a.mov_w_from_abs(GOFF, 1); a.add_w_rr(0, 1)
+    a.push_l(2); a.mov_b_rr('r6l', 'r2l'); a.extu_w(2); a.extu_l(2); a.add_l_imm(VDET, 2); a.mov_b_ld(2, 'r0l')
+    a.exts_w(0); a.add_w_rr(0, 1); a.pop_l(2)
+    a.pop_w(0); a.rts()
+    a.label('voice_repitch')                   # voice r6l, key r4l: oscillators + sample fields again (er6 = voice)
+    a.push_l(1); a.push_l(5)
+    a.bsr16('keys_osc_note')
+    a.mov_b_rr('r4l', 'r0l'); a.extu_w(0)
+    for _ in range(4): a.add_w_rr(0, 0)                                                     # key * 16
+    a.bsr16('pitch_off'); a.add_w_rr(1, 0); a.bpl('vr_p'); a.mov_w_imm(0, 0)
+    a.label('vr_p'); a.cmp_w_imm(len(RATIO_FINE), 0); a.bcs('vr_c'); a.mov_w_imm(len(RATIO_FINE) - 1, 0)
+    a.label('vr_c'); a.extu_l(0); a.mov_l_rr(0, 5); a.add_l_rr(5, 5); a.add_l_rr(0, 5); a.add_l_rr(5, 5)   # * 6
+    a.mov_l_imm('ratio_fine', 1); a.add_l_rr(1, 5)
+    for tab in ('d2', 'd1', 'd0'):
+        a.mov_w_ld(5, 8); a.adds1(5); a.adds1(5); dsp_voice_coef(tab)
+    a.pop_l(5); a.pop_l(1); a.rts()
+    a.label('vm_mode')                         # MODE changed: everything held stops, offsets back to 0
+    for v_ in range(NV):
+        nx_ = uniq('vmv'); a.mov_b_from_abs(VPAD + v_, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq(nx_)
+        a.bsr16('keys_note_off'); a.label(nx_)
+    a.mov_b_imm(0, 'r0l')
+    for v_ in range(NV): a.mov_b_to_abs('r0l', VDET + v_)
+    set_byte(MV, 0xFF); set_byte(MHN, 0); a.mov_w_imm(0, 0); a.mov_w_to_abs(0, GOFF); a.rts()
+    a.label('vm_on')                           # r0l = key, r1l = level
+    a.mov_b_from_abs(KVM, 'r1h'); a.cmp_b_imm(1, 'r1h'); a.beq16('vmo_mono'); a.bcc16('vmo_uni')
+    a.mov_b_from_abs(KNEXT, 'r1h'); a.push_l(2); a.mov_b_rr('r1h', 'r2l'); a.extu_w(2); a.extu_l(2)   # POLY:
+    a.add_l_imm(VDET, 2); a.mov_b_imm(0, 'r1h'); a.mov_b_st('r1h', 2); a.pop_l(2)                   # no detune
+    a.bra16('keys_note_on')
+    a.label('vmo_uni')                         # UNISON: 4 voices on the key, detuned by SPREAD, half level each
+    a.push_l(4); a.push_l(5); a.push_l(6)
+    a.mov_b_rr('r0l', 'r4l'); a.mov_b_rr('r1l', 'r4h'); a.shlr_b('r4h')
+    a.mov_b_from_abs(KUS, 'r5l'); a.extu_w(5); a.extu_l(5); a.shll_l2(5)
+    a.mov_l_imm('us_tab', 0); a.add_l_rr(0, 5)                                               # er5 = the 4 detunes
+    for k in range(4):
+        a.mov_b_from_abs(KNEXT, 'r6l'); a.extu_w(6); a.extu_l(6)                             # the voice it will get
+        a.mov_b_ld_disp(k, 5, 'r0l'); a.mov_l_rr(6, 1); a.add_l_imm(VDET, 1); a.mov_b_st('r0l', 1)
+        a.mov_b_rr('r4l', 'r0l'); a.mov_b_rr('r4h', 'r1l'); a.bsr16('keys_note_on')
+        a.bsr16('voice_repitch')                                                             # the sample detuned too
+    a.pop_l(6); a.pop_l(5); a.pop_l(4); a.rts()
+    a.label('vmo_mono')                        # MONO: legato on the sounding voice, last note wins
+    a.push_l(4); a.push_l(5); a.push_l(6)
+    a.mov_b_rr('r0l', 'r4l'); a.mov_b_rr('r1l', 'r4h')
+    a.bsr16('mh_remove'); a.mov_b_from_abs(MHN, 'r0l'); a.cmp_b_imm(8, 'r0l'); a.bcc('vmm_full')   # push the key
+    a.extu_w(0); a.extu_l(0); a.add_l_imm(MHELD, 0); a.mov_b_st('r4l', 0); a.mov_b_from_abs(MHN, 'r0l'); a.inc_b('r0l')
+    a.mov_b_to_abs('r0l', MHN)
+    a.label('vmm_full')
+    a.mov_b_from_abs(MV, 'r6l'); a.cmp_b_imm(0xFF, 'r6l'); a.beq('vmm_new')
+    a.extu_w(6); a.extu_l(6); a.mov_l_rr(6, 1); a.add_l_imm(VPAD, 1); a.mov_b_ld(1, 'r0l')
+    a.cmp_b_imm(0xFF, 'r0l'); a.beq('vmm_new')                                               # released: a new note
+    a.bsr16('mono_glide'); a.bra16('vmm_x')
+    a.label('vmm_new')
+    a.mov_b_from_abs(KNEXT, 'r0l'); a.mov_b_to_abs('r0l', MV)
+    a.extu_w(0); a.extu_l(0); a.add_l_imm(VDET, 0); a.mov_b_imm(0, 'r1l'); a.mov_b_st('r1l', 0)
+    a.mov_w_imm(0, 0); a.mov_w_to_abs(0, GOFF)
+    a.mov_b_rr('r4l', 'r0l'); a.mov_b_rr('r4h', 'r1l'); a.bsr16('keys_note_on')
+    a.label('vmm_x'); a.pop_l(6); a.pop_l(5); a.pop_l(4); a.rts()
+    a.label('mono_glide')                      # voice er6 (MV) now plays key r4l: from where it is, GLIDE away
+    a.mov_l_rr(6, 1); a.add_l_imm(VKEY, 1); a.mov_b_ld(1, 'r0l'); a.mov_b_st('r4l', 1)     # old key, VKEY = new
+    a.mov_l_rr(6, 1); a.add_l_imm(VPAD, 1); a.mov_b_st('r4l', 1)                           # VPAD = new (held)
+    a.mov_b_from_abs(KGL, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.bne('mg_on')
+    a.mov_w_imm(0, 0); a.mov_w_to_abs(0, GOFF); a.bra16('voice_repitch')                   # no glide: jump
+    a.label('mg_on')
+    a.sub_b_rr('r4l', 'r0l'); a.exts_w(0)                                                   # old - new (semitones)
+    for _ in range(4): a.add_w_rr(0, 0)                                                     # x16
+    a.mov_w_from_abs(GOFF, 1); a.add_w_rr(1, 0)                                             # + where the glide was
+    a.mov_w_to_abs(0, GOFF); a.mov_w_to_abs(0, GSTART)
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, GT)
+    a.bra16('voice_repitch')
+    a.label('mh_remove')                       # r4l out of the MONO held list
+    a.mov_b_from_abs(MHN, 'r5l'); a.mov_b_imm(0, 'r5h')
+    a.label('mhr_f'); a.cmp_b_rr('r5l', 'r5h'); a.beq('mhr_x')
+    a.mov_b_rr('r5h', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_imm(MHELD, 0); a.mov_b_ld(0, 'r1l')
+    a.cmp_b_rr('r4l', 'r1l'); a.beq('mhr_rm'); a.inc_b('r5h'); a.bra('mhr_f')
+    a.label('mhr_rm'); a.mov_b_rr('r5h', 'r0l'); a.inc_b('r0l'); a.cmp_b_rr('r5l', 'r0l'); a.beq('mhr_dn')
+    a.extu_w(0); a.extu_l(0); a.add_l_imm(MHELD, 0); a.mov_b_ld(0, 'r1l'); a.subs1(0); a.mov_b_st('r1l', 0)
+    a.inc_b('r5h'); a.bra('mhr_rm')
+    a.label('mhr_dn'); a.dec_b('r5l'); a.mov_b_to_abs('r5l', MHN)
+    a.label('mhr_x'); a.rts()
+    a.label('vm_off')                          # r0l = key
+    a.mov_b_from_abs(KVM, 'r1h'); a.cmp_b_imm(1, 'r1h'); a.bne16('keys_note_off')         # POLY / UNISON
+    a.push_l(4); a.push_l(5); a.push_l(6)
+    a.mov_b_rr('r0l', 'r4l'); a.bsr16('mh_remove')
+    a.mov_b_from_abs(MV, 'r6l'); a.cmp_b_imm(0xFF, 'r6l'); a.beq('vmf_x')
+    a.extu_w(6); a.extu_l(6); a.mov_l_rr(6, 1); a.add_l_imm(VPAD, 1); a.mov_b_ld(1, 'r0l')
+    a.cmp_b_rr('r4l', 'r0l'); a.bne('vmf_x')                                                # not the sounding key
+    a.mov_b_from_abs(MHN, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('vmf_rel')
+    a.add_b_imm(0xFF, 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_imm(MHELD, 0); a.mov_b_ld(0, 'r4l')   # the last held
+    a.bsr16('mono_glide'); a.bra('vmf_x')
+    a.label('vmf_rel'); a.mov_b_rr('r4l', 'r0l'); a.bsr16('keys_note_off'); set_byte(MV, 0xFF)
+    a.label('vmf_x'); a.pop_l(6); a.pop_l(5); a.pop_l(4); a.rts()
+    a.label('glide_tick')                      # MONO glide: GOFF goes linearly from GSTART to 0 over GLIDE
+    a.mov_w_from_abs(GOFF, 0); a.beq16('gt_x')
+    a.mov_b_from_abs(MV, 'r1l'); a.cmp_b_imm(0xFF, 'r1l'); a.bne('gt_on')
+    a.mov_w_imm(0, 0); a.mov_w_to_abs(0, GOFF); a.rts()
+    a.label('gt_on')
+    a.push_l(4); a.push_l(5); a.push_l(6)
+    a.mov_b_from_abs(KGL, 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0); a.mov_l_imm('la_ms', 1); a.add_l_rr(0, 1)
+    a.mov_w_ld(1, 5); a.extu_l(5)                                                            # er5 = glide ms
+    a.mov_l_from_abs(TICK_MS, 4); a.mov_l_from_abs(GT, 0); a.sub_l(0, 4)                     # er4 = ms gone
+    a.mov_w_imm(0, 0); a.cmp_l_rr(5, 4); a.bcc('gt_set')                                    # over (or GLIDE off): 0
+    a.mov_l_rr(5, 0); a.sub_l(4, 0)                                                          # er0 = ms left
+    a.mov_w_from_abs(GSTART, 1); a.mov_b_imm(0, 'r6h'); a.mov_w_rr(1, 1); a.bpl('gt_pos')
+    a.mov_b_imm(1, 'r6h'); a.mov_w_imm(0, 2); a.sub_w_rr(1, 2); a.mov_w_rr(2, 1)           # |GSTART|, sign in r6h
+    a.label('gt_pos'); a.mulxu_w(1, 0); a.divxu_w(5, 0)                                     # r0 = |GSTART| * left / g
+    a.cmp_b_imm(0, 'r6h'); a.beq('gt_set'); a.mov_w_imm(0, 2); a.sub_w_rr(0, 2); a.mov_w_rr(2, 0)
+    a.label('gt_set')
+    a.mov_w_from_abs(GOFF, 1); a.cmp_w_rr(0, 1); a.beq('gt_out'); a.mov_w_to_abs(0, GOFF)
+    a.mov_b_from_abs(MV, 'r6l'); a.extu_w(6); a.extu_l(6); a.mov_l_rr(6, 1); a.add_l_imm(VKEY, 1); a.mov_b_ld(1, 'r4l')
+    a.bsr16('voice_repitch')
+    a.label('gt_out'); a.pop_l(6); a.pop_l(5); a.pop_l(4)
+    a.label('gt_x'); a.rts()
     a.label('keys_padleds')                    # v1.91: held keys on the pad LEDs (pad p = key id p + 17)
     a.mov_w_imm(0, 2)
     for v in range(NV):
@@ -1753,6 +1979,8 @@ def build():
     a.bsr16('ki_voices')                       # voices before any drawing: a draw costs milliseconds
     a.bsr16('keys_padleds')
     a.bsr16('lfo_tick')
+    a.bsr16('arp_tick')
+    a.bsr16('glide_tick')
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_KEYS, 'r0l'); a.beq('ki_pg'); a.cmp_b_imm(P_KSET, 'r0l'); a.beq('ki_pg')
     a.cmp_b_imm(P_DDS, 'r0l'); a.bne16('ki_pout')
     a.label('ki_pg')
@@ -1822,8 +2050,8 @@ def build():
     a.mov_b_ld(1, 'r1l')                                                             # r1l = level for the velocity
     a.mov_b_ld(2, 'r0l')                                                             # r0l = key
     a.cmp_b_imm(0, 'r1l'); a.beq('kv_off')
-    a.bsr16('keys_note_on'); a.bra('kv_drain')
-    a.label('kv_off'); a.bsr16('keys_note_off'); a.bra('kv_drain')
+    a.bsr16('arp_on'); a.bra('kv_drain')
+    a.label('kv_off'); a.bsr16('arp_off'); a.bra('kv_drain')
     a.label('kv_tick')                         # note-ons wrote g = 0 (phase reset); start them once it has held
     k_since(KTICK); a.cmp_l_imm(2, 0); a.bcs16('kv_rel')                             # >= 1 full ms (44 samples)
     for v in range(NV):
@@ -2217,8 +2445,8 @@ def build():
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.bne('g1k_src')
     a.mov_w_rr(5, 0); a.and_w_imm(0x000F, 0); a.add_b_imm(PAD2KEY, 'r0l')          # pad -> key id
     a.btst_imm(6, 'r5h'); a.bne('g1k_off')
-    a.mov_b_imm(KEYS_LEVEL, 'r1l'); a.bsr16('keys_note_on'); a.bra('g1k_eat')
-    a.label('g1k_off'); a.bsr16('keys_note_off')
+    a.mov_b_imm(KEYS_LEVEL, 'r1l'); a.bsr16('arp_on'); a.bra('g1k_eat')
+    a.label('g1k_off'); a.bsr16('arp_off')
     a.label('g1k_eat'); a.mov_w_imm(1, 0); a.pop_l(5); a.rts()
     a.label('g1k_src')                                       # picking: a pad hit = that pad onto the keys
     a.btst_imm(6, 'r5h'); a.bne('g1k_eat')                   # releases eaten (stock would stop a GATE pad mid-capture)
@@ -3518,6 +3746,14 @@ def build():
     a.label('vib_ct'); a.raw(struct.pack('>17H', *VIB_CT))
     a.label('ratio_fine')                                      # key * 16 + 1/16 semitone -> the 3 pitch fields (e0 format)
     for c2, c1, c0 in RATIO_FINE: a.raw(struct.pack('>HHH', c2 << 8, c1 << 8, c0 << 8))
+    a.label('arp_step'); a.raw(struct.pack('>%dH' % len(ARP_STEP), *ARP_STEP))
+    a.label('arp_bpm'); a.raw(struct.pack('>%dH' % len(ARP_BPM), *ARP_BPM))
+    a.label('arp_gt'); a.raw(struct.pack('>%dH' % len(ARP_GATE), *ARP_GATE))
+    a.label('arp_mn')
+    for i in range(len(ARP_MODES)): a.dc_l('s_arm%d' % i)
+    a.label('us_tab'); a.raw(bytes(x & 0xFF for x in US_TAB)); a.align2()
+    a.label('vm_nm')
+    for i in range(len(VM_NAMES)): a.dc_l('s_vmn%d' % i)
     a.label('lfo_wn')
     for i in range(len(LFO_WAVES)): a.dc_l('s_lfw%d' % i)
     a.label('lfo_rn')
@@ -3627,8 +3863,10 @@ def main(raw, outdir):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
                          (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0),
-                         (KLFW, 0), (KLFR, 6), (KLFP, 0), (KLFF, 0), (KLFL, 0), (KLFD, 0), (TREMF, 64), (FLFO, 0),
+                         (GOFF, 0), (GOFF + 1, 0), (KLFW, 0), (KLFR, 6), (KLFP, 0), (KLFF, 0), (KLFL, 0), (KLFD, 0), (TREMF, 64), (FLFO, 0),
                          (LFO_OFF, 0), (LFO_V, 0), (LFO_SH, 0), (LFO_PP, 0),
+                         (KARP, 0), (KARR, 6), (KARG, 1), (KARO, 1), (AN, 0), (ACUR, 0xFF), (AOFF, 0),
+                         (KVM, 0), (KGL, 0), (KUS, 6), (MV, 0xFF), (MHN, 0), *((VDET + i, 0) for i in range(NV)),
                          (MSLOT, 12), (MSLOT + 1, 0), (MSLOT + 2, 0), (MLVL, 64), (MLVL + 1, 64), (MLVL + 2, 64),
                          *((MCTRL + i, 0) for i in range(6)), *((MCLAST + i, 0xFF) for i in range(6))):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)

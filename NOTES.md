@@ -249,6 +249,28 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.94 (1194, 2026-10-15, emulator-tested, NOT on hw): voice modes MONO / GLIDE / UNISON
+- **VOICE tab** (DDS-DSP, 6th: VOICE MODE): MODE POLY / MONO / UNISON, GLIDE (OFF, 10-2000 ms), SPREAD (unison
+  detune 0-15).
+- Notes flow pads / MIDI -> ARP (if on) -> voice mode (vm_on / vm_off) -> keys_note_on / off, so MONO + ARP = a mono
+  arp with glide.
+- Every pitch write (keys_osc_note, voice_repitch) adds `pitch_off` = LFO_OFF (vibrato) + GOFF (glide) + VDET[voice]
+  (unison), in 1/16 semitones; the sample's fields come from `ratio_fine` with the same offset.
+- MONO: one voice (MV), a held stack (MHELD, last note wins). A new key while it sounds = legato: VKEY / VPAD move to the
+  new key and GOFF = (old - new) x 16 + where the glide was; glide_tick takes GOFF linearly to 0 over GLIDE. Releasing
+  the sounding key glides back to the last held one; the last release ends the note.
+- UNISON: each note starts 4 voices (VDET = -3 / -1 / +1 / +3 x SPREAD / 4), half level each; POLY clears VDET.
+- MODE changes release every held voice and clear the offsets (no stuck or detuned voices).
+- ARP step clock now advances by exactly one step (AT += step, catch up if more than a step late): no tempo drift.
+
+### v1.93 (1193, 2026-10-15, emulator-tested, NOT on hw): arpeggiator
+- **ARP tab** (DDS-DSP menu, 5th: ARPEGGIATOR): MODE OFF / UP / DOWN / UP+DOWN / RANDOM, TEMPO 60-240 BPM (1/16 steps),
+  GATE 25 / 50 / 75 / 100 % (100 = legato), OCTAVES 1-3.
+- Pads and MIDI notes go through arp_on / arp_off: ARP off = straight to keys_note_on / off; on = a sorted held list
+  (up to 8, repeats ignored). arp_tick (every KEYS pass) steps every 1/16, ends the note at GATE, plays held[i] + 12 x
+  octave (above the top key: a rest). UP+DOWN turns without repeating the ends; RANDOM = 16-bit LCG.
+- Changing MODE stops the arp note, empties the list and releases notes held before (no stuck voices).
+
 ### v1.92 (1192, 2026-10-15, emulator-tested, NOT on hw): DDS-DSP LFO
 - **LFO tab** (DDS-DSP menu: OSCILLATORS / SAMPLE ATTACK / ENVELOPES / MODULATION): WAVE (TRIANGLE / SQUARE / SAW /
   RANDOM = sample & hold per cycle), RATE (0.2-15 Hz), PITCH (0-16 = up to a semitone, shown in cents), FILTER (0-16 =
