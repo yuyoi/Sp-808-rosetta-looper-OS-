@@ -10,6 +10,40 @@ Sources:
 - RC-505mk2 parameter guide: [Roland PDF](https://static.roland.com/assets/media/pdf/RC-505mk2_Parameter_eng02_W.pdf)
 - RC-505mk2 review: [Sound On Sound](https://www.soundonsound.com/reviews/boss-rc-505-mkii?amp)
 
+## Looper v2 plan (2026-10-14, user decisions)
+
+**What the user asked for:** 4 loops with faders and FX.
+
+| topic | decision |
+|---|---|
+| timing | **synced to loop 1**: loop 1 sets the length, loops 2-4 are exactly that long (2x / 4x later) and start on its grid |
+| levels | **faders A-D = loops 1-4** |
+| controls | **ASSIGN menu**: each action (REC/DUB, PLAY/STOP, UNDO, CLEAR, NEXT LOOP, ...) gets a physical control (PAD SAMPLING, footswitch, STATUS A-D, pads, later MIDI). The same control on 2+ actions = **single-switch mode** for it: tap rec/play/dub, double tap stop, hold undo / clear |
+| FX | **per-loop FX slot**, picked in the menu (gate, chorus, EQ, delay, ...). It is **printed while that loop records**: the FX location goes to "record" (0x0D) for the take, so every loop can carry a different effect although DSP1 runs one algorithm at a time |
+| overdub | v1: re-recording a loop **replaces** it; bounce-overdub (loop + input into one take) later |
+
+**Engine:** pad layers (the v0.9b engine): loop n = a pad, recorded by the stock sampler, trimmed to the loop length,
+played with pad Loop ON (S-E, seamless), started on the loop grid. Tracks A-D can't loop (no cycle play).
+
+### Phases
+0. **Hardware test of v0.9b** (in firmware 1.8, LOOP tile): does a second layer record while the first plays,
+   do the layers stay in sync, any clicks at the loop point, any stock screens popping up.
+1. **Core v2:** 4 fixed loop slots, loop select, record / replace per loop, synced starts, faders A-D -> loop
+   levels, new LOOP page (4 lanes: state, level, FX, a position bar).
+2. **ASSIGN menu** + single-switch mode; footswitch (ADC ch 11) and STATUS A-D as assignable controls.
+3. **Per-loop FX slot:** FX type per loop, loaded with location "record" for that loop's take, back after it.
+4. Later: bounce overdub, MIDI control, 2x / 4x loop lengths, count-in / click, save sets, KEYS over loops.
+
+### To reverse-engineer
+1. **Live loop level:** the pad level (+15) is applied at voice start; a fader needs the DSP0 voice level while
+   it plays (voice setup 0x14EA28 -> 0x43B670 + 16 * ch; find the level coefficient write).
+2. **Faders as plain inputs:** ADC ch 0-3 through 0x1277E8 (like the PARA knobs), and keep the stock from
+   also applying them to tracks.
+3. **STATUS A-D / EFFECTS A-D key codes** (key groups 3-7, not mapped yet).
+4. **FX choice + location API:** stock FX select / load (loader 0x1081D6, patch select near 0x11B470),
+   0x11F2AE(7, 0, 0x0D) = location record; confirm on hw that the take is recorded post-FX.
+5. **Footswitch:** ADC ch 11 threshold in normal use.
+
 ## BOSS ideas worth stealing
 | BOSS feature | what it does |
 |---|---|
