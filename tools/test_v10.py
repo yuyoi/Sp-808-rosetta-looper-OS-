@@ -105,7 +105,7 @@ class KeysSim(test_v09.Sim):
         e = self.e; e.ww(bm.KEY_EVENT, code); base = code & 0xFF
         if base in (bm.K_SONG, bm.K_SYSTEM, bm.K_SAMPLE) or code == bm.K_SH_SYSTEM: r = self.call('g8')
         elif (base & 0xF0) == 0x10: r = self.call('g1')
-        elif base == bm.K_PADSMPL: r = self.call('g2')
+        elif (base & 0xF0) == 0x20: r = self.call('g2')          # PAD BANK, PAD SAMPLING, ...
         else: r = 0
         if r == 0: self.call(self.handlers[self.screen], 9)
         self.commit()
@@ -208,6 +208,26 @@ def main(image_path, out):
     sim.out = []; sim.pad(7); sim.run(200); ys = list(sim.out)
     f, pk = freq(ys); sim.pad(7, False); sim.run(30)
     print('new sample on the keys: f = %.1f Hz peak %.3f' % (f, pk))
+    # ---- v1.72: PAD BANK inside KEYS (the stock bank screen left our page and switched banks behind KEYS' back) ----
+    sim.run(400)                                               # earlier notes released: idle voices get muted
+    Wm = lambda n: (bm.dsp_addr(n) & 0xFFC) >> 2
+    print('idle voices muted: VMUTE %s lvlk %s g %s' % ([e.rb(bm.VMUTE + v) for v in range(bm.NV)],
+          [sim.prog[Wm('v%d_lvlk' % v)] & 0xFF for v in range(bm.NV)], [sim.prog[Wm('v%d_g' % v)] & 0xFF for v in range(bm.NV)]))
+    sim.out = []; sim.run(300); print('idle output peak %.6f' % (max(abs(y) for y in sim.out) / 0x7FFFFF))
+    b0 = e.rb(bm.KBANK)
+    sim.key(bm.K_PADBANK); sim.run(10)
+    print('PAD BANK in PLAY -> state %s KBSEL %d bank %d page %d' % (sim.kstate(), e.rb(bm.KBSEL), e.rb(bm.KBANK) + 1, e.rb(bm.PAGE)))
+    shots.append(('PAD BANK', sim.shot()))
+    sim.key(bm.K_PADBANK); sim.run(10); print('PAD BANK again -> bank %d (+16)' % (e.rb(bm.KBANK) + 1))
+    sim.pad(2); sim.pad(2, False); sim.run(10)
+    print('pad 3 -> bank %d KBSEL %d state %s (no sampling)' % (e.rb(bm.KBANK) + 1, e.rb(bm.KBSEL), sim.kstate()))
+    sim.key(bm.K_PADBANK); sim.key(bm.K_EXIT); sim.run(10)
+    print('PAD BANK, EXIT -> KBSEL %d page %d (still KEYS)' % (e.rb(bm.KBSEL), e.rb(bm.PAGE)))
+    for _ in range(4): sim.key(bm.K_PADBANK)                   # on, +16, +16, +16: back to banks 1-16
+    sim.pad(b0); sim.pad(b0, False); sim.run(10)
+    print('back to bank %d (was %d)' % (e.rb(bm.KBANK) + 1, b0 + 1))
+    sim.pad(5); sim.pad(5, False); sim.run(1200); f, pk = freq(sim.out[-4000:]) if False else (0, 0)
+    print('hit pad 6 -> %s rec ms %d' % (sim.kstate(), e.rl(bm.KREC_MS)))
     # ---- v1.6: knobs (filter, attack), EDIT page, reverse, Roland's DSP writes gated ----
     W = lambda n: (bm.dsp_addr(n) & 0xFFC) >> 2
     cf = lambda n: sim.prog[W(n)] & 0xFF

@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1171, '1.71'              # 1.71 = 1.7 + per-channel pass-through, mixer moved before the voices
+VERSION, VER_TXT = 1172, '1.72'              # 1.72 = PAD BANK inside KEYS, idle voices hard-muted, keys +6 dB
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -275,6 +275,7 @@ K_UP, K_DOWN, K_LEFT, K_RIGHT, K_EXIT, K_ENTER = 0x70, 0x71, 0x72, 0x73, 0xB0, 0
 K_SH_EXIT = K_EXIT | 0x100                   # SHIFT = +0x100 in the key word (like SHIFT+SYSTEM 0x181)
 K_SONG, K_SYSTEM, K_SAMPLE, K_SH_SYSTEM = 0x80, 0x81, 0x82, 0x181
 K_PADSMPL, K_SH_PADSMPL = 0x22, 0x122
+K_PADBANK = 0x20                             # PAD BANK (SHIFT = 0x120); stock: bank screen 0x0B via 0x13797A
 WAIT_LEVEL = 3
 ENC_DELTA = 0x427058                        # VALUE dial delta of this main-loop pass (signed word)
 PAD_USED = 0x14D8AA                         # (r0 = pad) -> r0 = 1 if the pad holds a sample (current bank)
@@ -353,6 +354,8 @@ KATT, KREV, KSCUR, KAEP = (RAM_BASE + 0x2E8 + i for i in range(4))  # attack ind
 KATT_T, KNOB, KGATE, KAE_T, KNOB_T = RAM_BASE + 0x2EC, RAM_BASE + 0x2F0, RAM_BASE + 0x2F3, RAM_BASE + 0x2F4, RAM_BASE + 0x2F8
 KROW = RAM_BASE + 0x300                                             # 32-byte text row for the EDIT page
 KTHRU = RAM_BASE + 0x2FC                                            # 1 = pads/tracks pass through KEYS in PLAY
+KBSEL = RAM_BASE + 0x2FD                                            # 1 = PAD BANK pressed: the next pad picks the bank
+VMUTE = RAM_BASE + 0x3A0                                            # per voice: 1 = idle voice hard-muted in the DSP
 # loop: a held note hands over to a fresh voice that starts at the loop start, 40 ms crossfade (source time)
 KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BASE + 0x324, RAM_BASE + 0x326, RAM_BASE + 0x39C
 VKEY, VLINK, VXF, VXL0 = RAM_BASE + 0x328, RAM_BASE + 0x330, RAM_BASE + 0x338, RAM_BASE + 0x340   # per voice (bytes)
@@ -637,6 +640,9 @@ def build():
     a.label('kk_wrap'); a.and_w_imm(0x000F, 0); a.mov_b_to_abs('r0l', KSRC); a.bra16('redraw')
     a.label('kk_exit')
     a.cmp_w_imm(K_EXIT, 5); a.bne16('done')
+    a.mov_b_from_abs(KBSEL, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kk_exit2')
+    set_byte(KBSEL, 0); a.bra16('redraw')
+    a.label('kk_exit2')
     a.bsr16('keys_exit')
 
     a.label('k_kset')                                     # EDIT page: UP/DOWN pick RELEASE THRU REVERSE LOOP, dial/ENTER
@@ -785,7 +791,9 @@ def build():
     a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1); D.text(31, 11, BANKSTR)
     a.mov_b_from_abs(KSRC, 'r0l'); a.add_b_imm(1, 'r0l'); a.mov_l_imm(PADSTR, 1); a.bsr16('fmt2')
     a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1); D.text(73, 11, PADSTR)
+    a.mov_b_from_abs(KBSEL, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dk_bsel')
     D.text(1, 27, 's_khelp', 'font_tiny'); a.bra16('dk_grid')
+    a.label('dk_bsel'); D.text(1, 27, 's_kbsel', 'font_tiny'); a.bra16('dk_grid')
     a.label('dk_rec'); D.text(1, 11, 's_ksamp'); D.text(1, 27, 's_kwait', 'font_tiny'); a.bra16('dk_grid')
     a.label('dk_play'); D.text(1, 11, 's_kplay'); D.text(1, 27, 's_kphelp', 'font_tiny')
     a.mov_b_from_abs(KSRC, 'r0l'); a.bsr16('dec2')                                     # PLAY SRC nn
@@ -877,7 +885,8 @@ def build():
     def coef_val(name, c): return keysdsp.coef_value(DSP_PROG, DSP_PARAMS, name, c)
     T_SHSEL = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_t')
     def dsp_voice_level(v):                    # voice v: level target coefficient := VLVL[v]
-        a.mov_b_from_abs(VLVL + v, 'r0h'); a.mov_b_imm(T_SHSEL, 'r0l'); a.mov_w_rr(0, 8)
+        a.mov_b_from_abs(VLVL + v, 'r0h'); a.add_b_rr('r0h', 'r0h')                   # x2: +6 dB (v1.72)
+        a.mov_b_imm(T_SHSEL, 'r0l'); a.mov_w_rr(0, 8)
         a.mov_w_imm(dsp_addr('v%d_t' % v), 0); a.jsr('own_coef')
     def ramp_steps(var, inc_table, idx_var, skip):     # elapsed / period steps, so a slow pass (a draw) doesn't slow the ramp
         a.mov_w_rr(2, 2); a.beq16(skip)                                                # period 0: no ramp
@@ -905,7 +914,7 @@ def build():
     def ld_l(base, n): vptr(base, 4); a.mov_l_ld_disp(0, 1, n)
     def st_l(n, base): vptr(base, 4); a.mov_l_st(n, 1)
     def vlevel_r6():                           # level coefficient of voice r6l := VLVL[voice]
-        ld_b(VLVL, 'r0h'); a.mov_b_imm(T_SHSEL, 'r0l'); a.mov_w_rr(0, 8); dsp_voice_coef('t')
+        ld_b(VLVL, 'r0h'); a.add_b_rr('r0h', 'r0h'); a.mov_b_imm(T_SHSEL, 'r0l'); a.mov_w_rr(0, 8); dsp_voice_coef('t')
     def dsp_coef_tab(name, table):             # coefficient of <name> := table[er4] (byte)
         a.mov_l_imm(table, 1); a.add_l_rr(4, 1); a.mov_b_ld(1, 'r0h')
         a.mov_b_imm(keysdsp.shsel(DSP_PROG, DSP_PARAMS, name), 'r0l'); a.mov_w_rr(0, 8)
@@ -955,6 +964,8 @@ def build():
     wait_ms(15)
     a.mov_l_imm(DSP_BASE, 0); a.push_l(0)
     a.mov_w_imm(0x300 - 0x3C, 1); a.mov_w_imm(0x3C, 8); a.mov_w_imm(1, 0); a.jsr('own_load'); a.adds4(7)
+    a.mov_b_imm(0, 'r0l')
+    for v in range(NV): a.mov_b_to_abs('r0l', VMUTE + v)                             # fresh program: nothing muted
     for v in range(NV): dsp_eram('v%d_rdA' % v, 0x18, 0); dsp_eram('v%d_rdB' % v, 0x18, 2)
     dsp_eram('rec_w0', 0); dsp_eram('rec_w1', 0)
     for v in range(NV): dsp_coef('v%d_t' % v, 0); dsp_coef('v%d_g' % v, 64)
@@ -989,7 +1000,7 @@ def build():
     a.label('kg_out'); a.rts()
 
     a.label('keys_exit')                       # leaving the page: voices off, recording off, routing back
-    set_byte(KGATE, 0); set_byte(KACTIVE, 0)
+    set_byte(KGATE, 0); set_byte(KACTIVE, 0); set_byte(KBSEL, 0)
     voices_silent()
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.beq('kx_r'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.beq('kx_r')
     a.bsr16('keys_rec_stop'); set_byte(KSTATE, KS_IDLE)
@@ -1007,6 +1018,18 @@ def build():
     dsp_coef('thru_l', THRU); dsp_coef('thru_r', THRU)                               # hear the pads while picking
     a.bsr16('keys_bank_sync')
     a.label('kpk_out'); a.rts()
+    a.label('keys_bankkey')                    # PAD BANK on KEYS / S-EDIT: playing -> back to picking; picking: the next pad
+    a.push_l(4); a.push_l(5); a.push_l(6)      # picks the bank (1-16 of the current 16), PAD BANK again = next 16
+    set_byte(PAGE, P_KEYS)
+    a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.bne('kbk_idle')
+    a.bsr16('keys_pick'); set_byte(KBSEL, 1); a.bra16('kbk_draw')
+    a.label('kbk_idle'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.bne16('kbk_draw')
+    a.mov_b_from_abs(KBSEL, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('kbk_grp')
+    set_byte(KBSEL, 1); a.bra16('kbk_draw')
+    a.label('kbk_grp'); a.mov_b_from_abs(KBANK, 'r0l'); a.add_b_imm(16, 'r0l'); a.and_b_imm(63, 'r0l')
+    a.mov_b_to_abs('r0l', KBANK)
+    a.label('kbk_draw'); a.bsr16('draw')
+    a.pop_l(6); a.pop_l(5); a.pop_l(4); a.rts()
     a.label('keys_bank_sync')                  # KBANK := current bank (0 if none loaded)
     a.mov_b_from_abs(CUR_BANK, 'r0l'); a.cmp_b_imm(64, 'r0l'); a.bcs('kbs_ok'); a.mov_b_imm(0, 'r0l')
     a.label('kbs_ok'); a.mov_b_to_abs('r0l', KBANK); a.rts()
@@ -1200,6 +1223,7 @@ def build():
     a.rts()
 
     a.label('keys_sample')                     # ENTER: play the source pad through DSP1 and record it there
+    set_byte(KBSEL, 0)
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.beq('ks_go')
     a.cmp_b_imm(KS_PLAY, 'r0l'); a.bne16('ks_out')
     a.label('ks_go')
@@ -1271,6 +1295,15 @@ def build():
     a.bsr16('draw')
     a.label('ki_out'); a.rts()
     a.label('ki_voices'); a.push_l(2)
+    for v in range(NV):                        # idle voices hard-muted: level smoothing 0 (L = t * 512 = 0 exactly) and
+        nx, um = uniq('vm'), uniq('vmu')       # the phase held at 0 (reads one fixed word = DC); back on as soon as busy
+        a.mov_b_from_abs(VSTATE + v, 'r0l'); a.mov_b_from_abs(VMUTE + v, 'r0h')
+        a.cmp_b_imm(0, 'r0l'); a.bne(um)
+        a.cmp_b_imm(0, 'r0h'); a.bne16(nx)
+        dsp_coef('v%d_lvlk' % v, 0); dsp_coef('v%d_g' % v, 0); set_byte(VMUTE + v, 1); a.bra16(nx)
+        a.label(um); a.cmp_b_imm(0, 'r0h'); a.beq16(nx)
+        dsp_coef('v%d_lvlk' % v, 63); set_byte(VMUTE + v, 0)
+        a.label(nx)
     a.mov_b_from_abs(KAEP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kv_drain')        # AGE_E reset held >= 1 ms: release
     k_since(KAE_T); a.cmp_l_imm(2, 0); a.bcs('kv_drain')
     dsp_coef('age_e_g', 64); set_byte(KAEP, 0)
@@ -1427,6 +1460,9 @@ def build():
     a.label('keys_pad_on')                     # r0l = pad -> r0 = 1 if it should be lit on the map
     a.push_l(4); a.mov_b_rr('r0l', 'r4l')
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.beq('kp_play')
+    a.mov_b_from_abs(KBSEL, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kp_src')
+    a.mov_b_from_abs(KBANK, 'r0l'); a.and_b_imm(0x0F, 'r0l'); a.cmp_b_rr('r4l', 'r0l'); a.beq16('kp_yes'); a.bra16('kp_no')
+    a.label('kp_src')
     a.mov_b_from_abs(KSRC, 'r0l'); a.cmp_b_rr('r4l', 'r0l'); a.beq16('kp_yes'); a.bra16('kp_no')
     a.label('kp_play'); a.add_b_imm(PAD2KEY, 'r4l')                                  # pad -> key id
     for v in range(NV):
@@ -1573,6 +1609,12 @@ def build():
     a.label('g1k_src')                                       # picking: a pad hit = that pad onto the keys
     a.btst_imm(6, 'r5h'); a.bne('g1k_eat')                   # releases eaten (stock would stop a GATE pad mid-capture)
     a.cmp_b_imm(KS_IDLE, 'r0l'); a.bne('g1k_eat')            # sampling: pads do nothing
+    a.mov_b_from_abs(KBSEL, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('g1k_pick')
+    a.mov_b_rr('r5l', 'r1l'); a.and_b_imm(0x0F, 'r1l')                              # bank mode: pad = bank
+    a.mov_b_from_abs(KBANK, 'r0l'); a.and_b_imm(0x30, 'r0l'); a.add_b_rr('r1l', 'r0l')
+    a.mov_b_to_abs('r0l', KBANK); set_byte(KBSEL, 0)
+    a.bsr16('draw'); a.bra16('g1k_eat')
+    a.label('g1k_pick')
     a.mov_b_rr('r5l', 'r0l'); a.and_w_imm(0x000F, 0); a.mov_b_to_abs('r0l', KSRC)
     a.bsr16('keys_sample'); a.bsr16('draw'); a.bra('g1k_eat')
     a.label('g1_stock')
@@ -1784,6 +1826,11 @@ def build():
 
     # ================= key group 2: PAD SAMPLING =================
     a.label('g2')
+    a.mov_w_from_abs(KEY_EVENT, 0); a.and_w_imm(0xFEFF, 0); a.cmp_w_imm(K_PADBANK, 0); a.bne('g2_npb')
+    a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('g2_npb')
+    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_KEYS, 'r0l'); a.beq('g2_pb'); a.cmp_b_imm(P_KSET, 'r0l'); a.bne('g2_npb')
+    a.label('g2_pb'); a.bsr16('keys_bankkey'); a.bra16('ret1')
+    a.label('g2_npb')
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LOOP, 'r0l'); a.bne('g2_nl')      # looper: PAD SAMPLING
     a.btst_abs(0, LOOPTAKE); a.bne('g2_lp')                                         # (= footswitch) is ours
     a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('g2_nl')
@@ -2525,7 +2572,7 @@ def build():
                    ('s_armed', 'HIT A PAD'), ('s_cancel', 'EXIT=CANCEL'),
                    ('s_looper', 'LOOPER'), ('s_keys', 'KEYBOARD'),
                    ('s_soon', 'COMING SOON'), ('s_exithelp', 'EXIT=HOME'),
-                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_ksamp', 'SAMPLING...'),
+                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), ('s_ksamp', 'SAMPLING...'),
                    ('s_kwait', 'EXIT=CANCEL'), ('s_kplay', 'PLAY SRC'), ('s_kphelp', 'SHIFT+EXIT=PICK  UP/DN'), ('s_krel', 'REL')):
         a.label(lbl); a.string(s)
     return a.assemble(), a.labels
@@ -2584,7 +2631,7 @@ def main(raw, outdir):
         a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', MWR); a.mov_b_to_abs('r0l', MRD)
         a.mov_b_imm(KREL_DEFAULT, 'r0l'); a.mov_b_to_abs('r0l', KREL)
         a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', KACTIVE); a.mov_b_to_abs('r0l', KDIRTY)
-        for v_ in (KATT, KREV, KSCUR, KAEP, KGATE, KLOOP): a.mov_b_to_abs('r0l', v_)
+        for v_ in (KATT, KREV, KSCUR, KAEP, KGATE, KLOOP, KBSEL): a.mov_b_to_abs('r0l', v_)
         a.mov_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', KTHRU)
     ablob, alabels = bootanim.patch(img, ANIM_BASE, ram_init)
     assert ANIM_BASE + len(ablob) < DSP_BASE

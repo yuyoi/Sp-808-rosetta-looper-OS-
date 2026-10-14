@@ -249,6 +249,24 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.72 (1172, 2026-10-14): PAD BANK inside KEYS, idle voices hard-muted, keys +6 dB
+- **Hw v1.71:** background much lower but still there; it's "a mix of notes" looping every 1-3 s, THRU off doesn't
+  change it -> not the pass-through. Roland's DSP1 base (58 words) has no ERAM access, the loader writes all 708
+  words (no stale FX code). Explanation that fits: idle voices keep running at their last pitch (X drifts at 1 - r,
+  the read address moves at speed r) and replay the whole ERAM ring (the take, at that pitch) every 1.5/3 s; audible
+  only if their level isn't exactly 0 on hw (the model decays it to 0; cause on hw unknown).
+- **Fix:** idle voices hard-muted per pass (VMUTE): 'lvlk' = 0 (L = t * 512 = 0 exactly, no smoothing residue) and
+  'g' = 0 (phase held: X = REF - delta, the read address stays fixed = one word, DC). Back to lvlk 63 as soon as
+  the voice is busy (note-on state 1, loop continuation state 7), before kv_tick starts it. keys_load clears VMUTE.
+- Checked: Roland's coef writer 0x108936 skips writes while @0x411B65 & 3 == 3, but that is only set inside the DSP
+  word read 0x1098DA (used by the DSP RAM self-test), so no dropped writes in normal play.
+- **Keys +6 dB:** the level coefficient is 2 * VLVL (0..126; one voice at the default 48 = 0.375 of the sample).
+- **PAD BANK (0x20 / SHIFT 0x120) on KEYS / S-EDIT** never reaches the stock: the stock opens the bank screen 0x0B
+  (0x13797A -> 0x140016), our screen gets the leave event (KEYS lets go of DSP1) and the stock switches banks
+  behind KEYS' back (hw: pads went back to the old bank / silent, reset needed). Now: playing -> back to picking with
+  bank mode on; picking: PAD BANK = bank mode, again = next 16 banks (1-16 .. 49-64); a pad = that bank (no
+  sampling), EXIT cancels; the map lights the bank's pad. Group 2 also has 0x23 = HOLD (0x1377C8), 0x21 eaten.
+
 ### v1.71 (1171, 2026-10-14): background "oscillation" on hw, pass-through per channel, THRU toggle
 - **Hw report (v1.7):** keys work, but a constant background "like the sample" on the KEYS page: forever, same
   level, filter (knob A) makes no difference, gone on EXIT.
