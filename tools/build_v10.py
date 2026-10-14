@@ -422,7 +422,15 @@ LTAB, LCURX, LCH = RAM_BASE + 0x424, RAM_BASE + 0x425, RAM_BASE + 0x426
 LKEYW, LABT = RAM_BASE + 0x428, RAM_BASE + 0x42C
 ADC_TAB, ADC_N, SWNAMES, SWCODES, SW_N = 0x426CBE, 14, 0x15F9E8, 0x16414C, 67
 LAB_CH_NAMES = ['', '', '', '', '', '', 'PARA-A', 'PARA-B', 'PARA-C', 'BEAM L', 'BEAM R', 'FOOT SW?', '', '']
-LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt')]
+LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt'), ('LED SHOW', 'lab_ld')]
+# LEDs: Roland's API 0x132866(code) on / 0x132880(code) off; state bits at 0x427390 + 2 * (code >> 4), mask from the
+# word table 0x16464E[code & 15]. The factory LED CHECK's list (0x15F91E) without its zero entries = every LED.
+LED_ON, LED_OFF, LED_ROWS, LED_MASKS = 0x132866, 0x132880, 0x427390, 0x16464E
+LED_CODES = [0xF4, 0x40, 0x41, 0x42, 0x43, 0x60, 0x62, 0x64, 0x66, 0x61, 0x63, 0x65, 0x67, 0xA0, 0xA1, 0x50, 0x51, 0x52,
+             0x53, 0x54, 0xF2, 0xF3, 0x80, 0x81, 0x82, 0xF0, 0x91, 0x92, 0xC9, 0xB0, 0xB1, 0xF1, 0x31, 0x30, 0xD0, 0xD1,
+             0xD2, 0xC0, 0xC4, 0xC5, 0xC2, 0xC3, 0xC6, 0xC7, 0xC8, 0xC1, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x18, 0x19, 0x1A,
+             0x1B, 0x21, 0x14, 0x15, 0x16, 0x17, 0x22, 0x10, 0x11, 0x12, 0x13]
+LEDIX, LEDON, LEDWAS, LEDAUTO, LEDT = RAM_BASE + 0x448, RAM_BASE + 0x449, RAM_BASE + 0x44A, RAM_BASE + 0x44B, RAM_BASE + 0x44C
 # MFX (v1.91, interface + hooks; the sound blocks come later): our DSP1 program (mfxdsp.py) serves DSP0's three FX
 # insert slots (mixer group 7 index 0/1/2). Slot 1 goes through the stock FX LOCATION (so the EFFECTS button and the
 # OS's own re-apply on pad playback agree with it), slots 2/3 are written straight (the OS never touches them).
@@ -2534,13 +2542,7 @@ def build():
     a.mov_l_imm(KROW, 1); row_put('LAST KEY  ')
     a.mov_w_from_abs(LKEYW, 0); a.mov_w_rr(0, 0); a.bne('lbd_k'); row_put('-'); a.bra16('lbd_e')
     a.label('lbd_k')
-    a.push_l(4); a.mov_b_rr('r0l', 'r4l'); a.mov_b_imm(SW_N, 'r4h')    # r4l = code, r4h = entries left
-    a.mov_l_imm(SWCODES, 3); a.mov_l_imm(SWNAMES, 2)
-    a.label('lbd_s'); a.mov_w_ld(3, 0); a.cmp_b_rr('r4l', 'r0l'); a.beq('lbd_f')
-    a.adds1(3); a.adds1(3); a.add_l_imm(9, 2); a.dec_b('r4h'); a.bne('lbd_s')
-    row_put('?'); a.bra('lbd_c')
-    a.label('lbd_f'); a.bsr16('row_str')                        # the factory test's name for it
-    a.label('lbd_c'); a.pop_l(4); row_put('  ')
+    a.bsr16('key_name'); row_put('  ')
     a.mov_w_from_abs(LKEYW, 0); a.bsr16('hex4w')
     a.mov_w_from_abs(LKEYW, 0); a.btst_imm(6, 'r0h'); a.beq('lbd_e'); row_put(' UP')
     a.label('lbd_e'); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
@@ -2548,6 +2550,60 @@ def build():
     D.text(4, 23, 's_lbhelp', 'font_tiny')
     a.rts()
     a.label('lab_bt_k'); a.mov_w_to_abs(5, LKEYW); a.jmp('redraw')
+    a.label('key_name')                                         # r0l = code -> the factory SW CHECK name at er1 (or ?)
+    a.push_l(3); a.push_l(4); a.mov_b_rr('r0l', 'r4l'); a.mov_b_imm(SW_N, 'r4h')    # r4l = code, r4h = entries left
+    a.mov_l_imm(SWCODES, 3); a.mov_l_imm(SWNAMES, 2)
+    a.label('kname_s'); a.mov_w_ld(3, 0); a.cmp_b_rr('r4l', 'r0l'); a.beq('kname_f')
+    a.adds1(3); a.adds1(3); a.add_l_imm(9, 2); a.dec_b('r4h'); a.bne('kname_s')
+    row_put('?'); a.bra('kname_x')
+    a.label('kname_f'); a.bsr16('row_str')
+    a.label('kname_x'); a.pop_l(4); a.pop_l(3); a.rts()
+    # ---- LAB: LED SHOW = one LED at a time (its own state restored after), or a chase ----
+    a.label('led_code')                                         # r0 = LED_CODES[LEDIX]
+    a.mov_b_from_abs(LEDIX, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm('led_codes', 2); a.add_l_rr(0, 2)
+    a.mov_b_ld(2, 'r0l'); a.extu_w(0); a.rts()                                     # (er2: er1 is the text cursor)
+    a.label('led_light')                                        # the current LED on, remembering what it was
+    a.mov_b_from_abs(LEDON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('ledl_x')
+    a.bsr16('led_code'); a.push_w(0)
+    a.mov_w_rr(0, 1); a.and_w_imm(0x00F0, 1); a.shlr_w(1); a.shlr_w(1); a.shlr_w(1); a.extu_l(1)   # er1 = row * 2
+    a.add_l_imm(LED_ROWS, 1); a.mov_w_ld(1, 2)                                     # r2 = the row's bits
+    a.and_w_imm(0x000F, 0); a.extu_l(0); a.add_l_rr(0, 0); a.add_l_imm(LED_MASKS, 0); a.mov_w_ld(0, 0)
+    a.and_w_rr(2, 0); a.mov_b_imm(0, 'r1l'); a.mov_w_rr(0, 0); a.beq('ledl_off'); a.mov_b_imm(1, 'r1l')
+    a.label('ledl_off'); a.mov_b_to_abs('r1l', LEDWAS)
+    a.pop_w(0); a.jsr(LED_ON); set_byte(LEDON, 1)
+    a.label('ledl_x'); a.rts()
+    a.label('led_restore')                                      # the current LED back to what it was
+    a.mov_b_from_abs(LEDON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('ledr_x')
+    set_byte(LEDON, 0)
+    a.bsr16('led_code')
+    a.mov_b_from_abs(LEDWAS, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.bne('ledr_on')
+    a.jsr(LED_OFF); a.rts()
+    a.label('ledr_on'); a.jsr(LED_ON)
+    a.label('ledr_x'); a.rts()
+    a.label('led_step')                                         # r1l = +1 / -1 (wraps)
+    a.push_w(1); a.bsr16('led_restore'); a.pop_w(1)
+    a.mov_b_from_abs(LEDIX, 'r0l'); a.add_b_rr('r1l', 'r0l')
+    a.cmp_b_imm(len(LED_CODES), 'r0l'); a.bcs('leds_ok')
+    a.mov_b_imm(0, 'r0l'); a.cmp_b_imm(0xFF, 'r1l'); a.bne('leds_ok'); a.mov_b_imm(len(LED_CODES) - 1, 'r0l')
+    a.label('leds_ok'); a.mov_b_to_abs('r0l', LEDIX)
+    a.bsr16('led_light'); a.rts()
+    a.label('lab_ld_d')
+    a.bsr16('led_light')                                        # shown: the LED is lit
+    a.mov_l_imm(KROW, 1); row_put('LED ')
+    a.mov_b_from_abs(LEDIX, 'r0l'); a.extu_w(0); a.adds1(0); a.bsr16('fmt_u'); row_put('/%d  ' % len(LED_CODES))
+    a.bsr16('led_code'); a.push_w(0); a.bsr16('key_name'); row_put('  '); a.pop_w(0); a.bsr16('hex4w')
+    a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+    D.text(4, 12, KROW, 'font_tiny')
+    a.mov_b_from_abs(LEDAUTO, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('ldd_m')
+    D.text(4, 19, 's_ledchase', 'font_tiny')
+    a.label('ldd_m'); D.text(4, 25, 's_ledhelp', 'font_tiny')
+    a.rts()
+    a.label('lab_ld_k')
+    a.cmp_w_imm(K_RIGHT, 5); a.bne('ldk_l'); a.mov_b_imm(1, 'r1l'); a.bsr16('led_step'); a.jmp('redraw')
+    a.label('ldk_l'); a.cmp_w_imm(K_LEFT, 5); a.bne('ldk_u'); a.mov_b_imm(0xFF, 'r1l'); a.bsr16('led_step'); a.jmp('redraw')
+    a.label('ldk_u'); a.cmp_w_imm(K_UP, 5); a.bne('ldk_d'); set_byte(LEDAUTO, 1); a.jmp('redraw')
+    a.label('ldk_d'); a.cmp_w_imm(K_DOWN, 5); a.bne('ldk_x'); set_byte(LEDAUTO, 0); a.jmp('redraw')
+    a.label('ldk_x'); a.jmp('done')
     a.label('hex4w')                                            # r0 -> 4 hex digits at er1
     a.push_l(3); a.mov_w_rr(0, 3)
     for sh in (12, 8, 4, 0):
@@ -2558,10 +2614,17 @@ def build():
         a.label(nx); a.mov_b_st('r0l', 1); a.adds1(1)
     a.pop_l(3); a.rts()
     a.label('lab_idle')                                         # ANALOG INPUTS shown: redraw every 40 ms
-    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LAB, 'r0l'); a.bne('lbi_x')
-    a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_x')
+    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LAB, 'r0l'); a.bne('lbi_off')
+    a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_off')
+    a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('lbi_off')
+    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.bne('lbi_nl')
+    a.mov_b_from_abs(LEDAUTO, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('lbi_x')          # LED SHOW: the chase
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LEDT, 1); a.sub_l(1, 0); a.cmp_l_imm(90, 0); a.bcs('lbi_x')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LEDT)
+    a.mov_b_imm(1, 'r1l'); a.bsr16('led_step'); a.bra16('draw')
+    a.label('lbi_off'); a.bra16('led_restore')                  # not on the LED tab: its LED back as it was
+    a.label('lbi_nl'); a.bsr16('led_restore')
     a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_x')
-    a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('lbi_x')
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LABT, 1); a.sub_l(1, 0); a.cmp_l_imm(40, 0); a.bcs('lbi_x')
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LABT)
     a.bra16('draw')
@@ -3221,6 +3284,7 @@ def build():
     a.label('mf_tgts')
     for i in range(len(MF_TGTS)): a.dc_l('s_mfg%d' % i)
     a.label('mf_c2i'); a.raw(bytes(MF_C2I)); a.align2()
+    a.label('led_codes'); a.raw(bytes(LED_CODES)); a.align2()
     a.label('lab_chn')
     for i in range(len(LAB_CH_NAMES)): a.dc_l('s_lbc%d' % i)
     a.label('rt_pren')
@@ -3247,7 +3311,7 @@ def build():
                    ('s_armed', 'HIT A PAD'), ('s_cancel', 'EXIT=CANCEL'),
                    ('s_looper', 'LOOPER'), ('s_keys', 'KEYBOARD'),
                    ('s_soon', 'COMING SOON'), ('s_exithelp', 'EXIT=HOME'),
-                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), *MAC_STRS, ('s_lbhelp', 'PRESS ANY BUTTON  EXIT=HOME'), ('s_ksamp', 'SAMPLING...'),
+                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), *MAC_STRS, ('s_lbhelp', 'PRESS ANY BUTTON  EXIT=HOME'), ('s_ledhelp', '</>=STEP  UP=CHASE  DOWN=STOP'), ('s_ledchase', 'CHASE...'), ('s_ksamp', 'SAMPLING...'),
                    ('s_kwait', 'EXIT=CANCEL'), ('s_kplay', 'PLAY SRC'), ('s_kphelp', 'SHIFT+EXIT=PICK  UP/DN'), ('s_krel', 'REL')):
         a.label(lbl); a.string(s)
     return a.assemble(), a.labels
@@ -3316,7 +3380,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0),
                          (MSLOT, 12), (MSLOT + 1, 0), (MSLOT + 2, 0), (MLVL, 64), (MLVL + 1, 64), (MLVL + 2, 64),
                          *((MCTRL + i, 0) for i in range(6)), *((MCLAST + i, 0xFF) for i in range(6))):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)

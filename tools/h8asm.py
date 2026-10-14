@@ -124,6 +124,9 @@ class Asm:
     def divxu_w(self, src, n): self._b(0x53, (src << 4) | n)                           # ern / src: rn = quot, en = rem
     def subs1(self, n): self._b(0x1B, n)                                                # subs #1,ern
     def add_w_rr(self, src, dst): self._b(0x09, (src << 4) | dst)
+    def and_w_rr(self, src, dst): self._b(0x66, (src << 4) | dst)                      # and.w rs,rd
+    def push_w(self, n): self._b(0x6D, 0xF0 | n)                                        # mov.w rn,@-sp
+    def pop_w(self, n): self._b(0x6D, 0x70 | n)                                         # mov.w @sp+,rn
     def sub_w_rr(self, src, dst): self._b(0x19, (src << 4) | dst)
     def cmp_w_rr(self, src, dst): self._b(0x1D, (src << 4) | dst)                     # flags of dst - src
     def cmp_l_rr(self, src, dst): self._b(0x1F, 0x80 | (src << 4) | dst)

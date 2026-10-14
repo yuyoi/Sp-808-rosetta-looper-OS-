@@ -87,7 +87,29 @@ def main(image_path, out):
         print('key %04X   LKEYW %04X  row [%s]' % (code, e.rw(bm.LKEYW), row))
     shots.append(('LAB buttons: INFO', sim.shot()))
     sim.key(0x4093); sim.run(5); shots.append(('LAB buttons: MARK released', sim.shot()))
-    sim.key(bm.K_EXIT); sim.run(5); print('EXIT       page', e.rb(bm.PAGE))
+    # ---- LAB: LED SHOW (Roland's LED on / off modelled on the state bits) ----
+    leds = []
+    def led_mask(code): return e.rw(bm.LED_MASKS + 2 * (code & 15)), bm.LED_ROWS + 2 * ((code >> 4) & 15)
+    def led_on(e):
+        m, a = led_mask(e.g16(0)); e.ww(a, e.rw(a) | m); leds.append(('on', e.g16(0)))
+    def led_off(e):
+        m, a = led_mask(e.g16(0)); e.ww(a, e.rw(a) & ~m); leds.append(('off', e.g16(0)))
+    e.stubs[bm.LED_ON], e.stubs[bm.LED_OFF] = led_on, led_off
+    m, a = led_mask(0x40); e.ww(a, e.rw(a) | m)              # the stock had LOC 1 lit
+    before = [e.rw(bm.LED_ROWS + 2 * r) for r in range(16)]
+    sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(10)
+    print('LED SHOW   tab', e.rb(bm.LTAB), 'LED', e.rb(bm.LEDIX), 'lit', e.rb(bm.LEDON), 'events', leds)
+    shots.append(('LED SHOW: LED 1', sim.shot()))
+    sim.key(bm.K_RIGHT); sim.run(5)
+    print('RIGHT      LED', e.rb(bm.LEDIX), 'was on', e.rb(bm.LEDWAS), 'events', leds[-3:])
+    shots.append(('LED SHOW: LOC 1', sim.shot()))
+    sim.key(bm.K_UP); sim.run(400)
+    print('chase 400 ms -> LED', e.rb(bm.LEDIX), '(expect about 5-6)')
+    shots.append(('LED SHOW: chase', sim.shot()))
+    sim.key(bm.K_DOWN); sim.key(bm.K_LEFT); sim.key(bm.K_LEFT); sim.run(5)
+    sim.key(bm.K_EXIT); sim.run(20)
+    after = [e.rw(bm.LED_ROWS + 2 * r) for r in range(16)]
+    print('EXIT       page', e.rb(bm.PAGE), 'LED rows restored:', before == after, 'lit', e.rb(bm.LEDON))
     print(ui_gfx.render(shots, out))
 
 

@@ -264,6 +264,8 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - **LAB tile** (hidden hardware): ANALOG INPUTS = the 14 raw ADC bytes (0x426CBE) as live bars (40 ms), the selected
   channel inverted with its name and value (6-8 PARA-A..C, 9/10 BEAM L/R, 11 FOOT SW?; the rest to be found on hw);
   BUTTONS = the last key event, its name from the factory SW CHECK table, the code, UP on release.
+  LED SHOW = every LED one at a time (</> step, UP = chase every 90 ms, DOWN = stop) with its factory name and code;
+  each LED's own state is put back when it is left (and on leaving the tab / page).
 - **KEYS: sample + oscillators**: with SAMPLE and any oscillator on (LA off, loop off) a held note no longer stops at
   the sample end: the sample is cut there (the LA cut, VLAT = VSEND) and the oscillators hold the note. (Found by the
   suite: ENV DECAY/SUSTAIN with SAW + SAMPLE ended at the 439 ms take.)
@@ -296,6 +298,11 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   CHECK for an "SP808-OP1" option board** / ANALOG CHECK (Fs 44.1 / 32 kHz, LINE / PHONE, MASTER / AUX / M+A outputs,
   AUX IN) / LED CHECK / DEVICE CHECK (CPU, DRAM).
 - D-Beam = ADC 9 / 10 read through curve tables (0x127A66 -> 0x426D12 pointers); 0x12780E = raw ADC n + 9.
+- **LEDs: 65, driven by code** (the same codes as the keys: pads 10-1F, LOC 40-43, EFX 50-54, STATUS 60-67 = A-D x 2
+  colours?, F4 / C4-C9 / 30-31 = LED-only). API: 0x132866(code) on, 0x132880(code) off, 0x13289A / 0x1328E0 /
+  0x1328FC / 0x132934 / 0x132944 = blink variants (masks 0x4273B0 / 0x4273D0); state bits 0x427390 + 2 * (code >> 4),
+  bit mask table 0x16464E[code & 15]; 0x13268C + 0x132564 push a row to the hardware. Factory list: 0x15F91E.
+  Ideas: KEYS voices on the pad LEDs, a VU meter on the pads, MFX slots on the EFX LEDs, a boot light show.
 - Mixer levels: 100 = the OS's nominal level (it writes 100 for master / input / tracks), 127 = about +6 dB over it
   (coefficient 63>>3 vs ~4.0), 64 = about -10 dB.
 
