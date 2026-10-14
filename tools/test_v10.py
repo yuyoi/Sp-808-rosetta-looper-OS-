@@ -193,6 +193,21 @@ def main(image_path, out):
     sim.out = []; sim.pad(7); sim.run(200); ys = list(sim.out)
     f, pk = freq(ys); sim.pad(7, False); sim.run(30)
     print('new sample on the keys: f = %.1f Hz peak %.3f' % (f, pk))
+    # leaving KEYS without EXIT (mode keys): the master routing must come back, KEYS re-arms on return
+    sim.key(bm.K_SAMPLE); sim.run(10)
+    print('SAMPLE -> page', e.rb(bm.PAGE), 'route code %02X' % e.rb(bm.FX_ROUTE_CODE), 'active', e.rb(bm.KACTIVE), 'state', sim.kstate())
+    sim.key(bm.K_SYSTEM); sim.run(10)
+    print('SYSTEM -> page', e.rb(bm.PAGE), 'route code %02X' % e.rb(bm.FX_ROUTE_CODE), 'active', e.rb(bm.KACTIVE), 'state', sim.kstate())
+    sim.key(bm.K_SONG); sim.run(10)
+    print('SONG   -> page', e.rb(bm.PAGE), 'route code %02X' % e.rb(bm.FX_ROUTE_CODE), 'active', e.rb(bm.KACTIVE))
+    e.ww(bm.FX_CUR, 5)                                        # meanwhile the stock FX engine loads algorithm 5
+    nl = len([x for x in sim.dsp_log if x[1] == 'load'])
+    sim.key(bm.K_SYSTEM); sim.run(10)
+    print('SYSTEM after a stock FX load -> reloaded', len([x for x in sim.dsp_log if x[1] == 'load']) - nl, 'state', sim.kstate(),
+          'route code %02X' % e.rb(bm.FX_ROUTE_CODE))
+    sim.call('menu', 1)                                       # screen 5 left for a stock screen (event 1); its idle stops
+    print('leave event -> route code %02X' % e.rb(bm.FX_ROUTE_CODE), 'active', e.rb(bm.KACTIVE))
+    sim.run(10); print('back (idle on page KEYS) -> route code %02X' % e.rb(bm.FX_ROUTE_CODE), 'active', e.rb(bm.KACTIVE))
     sim.key(bm.K_EXIT); sim.run(10)
     print('exit      page', e.rb(bm.PAGE), 'routing calls', sim.routing, 'route code %02X' % e.rb(bm.FX_ROUTE_CODE))
     print(ui_gfx.render(shots, out))

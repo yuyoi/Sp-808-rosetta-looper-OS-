@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1130, '1.3'               # 1.3 = 1.2 + every voice's level on mc2 (DSP1 has no general mc3)
+VERSION, VER_TXT = 1140, '1.4'               # 1.4 = 1.3 + KEYS cleans up on every way out (pads were silent elsewhere)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -326,6 +326,7 @@ DBGTXT = RAM_BASE + 0x200                   # 40 bytes
 KSTATE, KSRC, KLOADED, KROUTE, KNEXT, KBANK = (RAM_BASE + 0x240 + i for i in range(6))   # KBANK = bank on the pick screen
 BANKSTR = RAM_BASE + 0x2BC                                          # bank digits for the pick screen
 KDIRTY = RAM_BASE + 0x246                                           # KEYS page needs a redraw (notes don't draw)
+KACTIVE = RAM_BASE + 0x247                                          # KEYS owns DSP1 + the master routing right now
 VPAD, VSTATE = RAM_BASE + 0x248, RAM_BASE + 0x250                   # per voice: pad (0xFF free), state 0-3
 KREC_T0, KREC_MS, KTICK = (RAM_BASE + 0x260 + 4 * i for i in range(3))
 KDRAW_T, KDIAG = RAM_BASE + 0x26C, RAM_BASE + 0x270                 # last periodic redraw (ms); 24-byte monitor text
@@ -451,12 +452,16 @@ def build():
     a.mov_w_rr(0, 6)
     a.mov_b_rr('r6h', 'r6h'); a.bne16('done')
     a.cmp_b_imm(0x00, 'r6l'); a.beq16('enter')
+    a.cmp_b_imm(0x01, 'r6l'); a.beq16('leave')
     a.cmp_b_imm(0x05, 'r6l'); a.beq16('redraw')
     a.cmp_b_imm(0x09, 'r6l'); a.beq16('key')
     a.cmp_b_imm(0x06, 'r6l'); a.beq16('idle')
     a.bra16('done')
 
+    a.label('leave')                              # to a stock screen: KEYS must not keep the master routed
+    a.bsr16('keys_guard_off'); a.bra16('done')
     a.label('idle')
+    a.bsr16('keys_guard')                         # KEYS on/off follows the page, whatever changed it
     a.bsr16('seg_tick')                           # 7-segment line ticker
     a.bsr16('lp_idle')                            # looper clock, layer starts, LOOP page refresh
     a.bsr16('keys_idle')                          # KEYS: sampling timer / onset, pending note-ons
@@ -792,6 +797,10 @@ def build():
         for v in range(NV): dsp_coef('v%d_t' % v, 0); set_byte(VSTATE + v, 0); set_byte(VPAD + v, 0xFF)
 
     a.label('keys_enter')                      # KEYS page opened: our program in DSP1, the master through the FX
+    a.mov_w_from_abs(FX_CUR, 0); a.cmp_w_imm(0xFFFF, 0); a.beq('ke_ours')           # stock FX reloaded meanwhile?
+    set_byte(KLOADED, 0); set_byte(KSTATE, KS_IDLE)                                  # then our program + sample are gone
+    a.label('ke_ours')
+    set_byte(KACTIVE, 1)
     a.mov_b_from_abs(KLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('ke_loaded')
     a.bsr16('keys_load')
     a.label('ke_loaded')
@@ -828,7 +837,18 @@ def build():
     a.mov_b_from_abs(KROUTE, 'r0l'); a.mov_b_to_abs('r0l', FX_ROUTE_CODE); set_byte(KROUTE, 0xFF)
     a.label('kro_done'); a.rts()
 
+    a.label('keys_guard')                      # every idle pass: KEYS active <=> the KEYS page is shown
+    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_KEYS, 'r0l'); a.bne('kg_off')
+    a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('kg_out')
+    a.bsr16('keys_enter'); a.bsr16('draw'); a.rts()                                 # back from a stock screen
+    a.label('keys_guard_off')
+    a.label('kg_off')
+    a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kg_out')
+    a.bsr16('keys_exit')                                                             # left by SONG/SAMPLE/... not EXIT
+    a.label('kg_out'); a.rts()
+
     a.label('keys_exit')                       # leaving the page: voices off, recording off, routing back
+    set_byte(KACTIVE, 0)
     voices_silent()
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.beq('kx_r'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.beq('kx_r')
     a.bsr16('keys_rec_stop'); set_byte(KSTATE, KS_IDLE)
@@ -2165,6 +2185,7 @@ def main(raw, outdir):
         for i in range(NV): a.mov_b_to_abs('r0l', VPAD + i)
         a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', MWR); a.mov_b_to_abs('r0l', MRD)
         a.mov_b_imm(KREL_DEFAULT, 'r0l'); a.mov_b_to_abs('r0l', KREL)
+        a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', KACTIVE); a.mov_b_to_abs('r0l', KDIRTY)
     ablob, alabels = bootanim.patch(img, ANIM_BASE, ram_init)
     assert ANIM_BASE + len(ablob) < DSP_BASE
     p = SPLASH2_AT - 0x100000
