@@ -144,6 +144,17 @@ def main(image_path, out):
         ratio = 2 ** ((p - bm.KEYS_ROOT) / 12)
         print('pad %2d %-4s voices %s  f = %7.1f Hz (expect %7.1f) peak %.3f  after release: %s' % (
             p + 1, name, st, f, 1000 * ratio, pk, [e.rb(bm.VSTATE + v) for v in range(bm.NV)]))
+    # one-shot: a held note stops when its sample (639 ms recorded) runs out; an octave up after half the time
+    tw = (bm.dsp_addr('thru_l') & 0xFFC) >> 2
+    print('thru in PLAY: coef %d (64 = pads/tracks at full level through KEYS)' % (sim.prog[tw] & 0xFF))
+    for p, name in ((7, 'root'), (14, '+7')):
+        t0 = sim.t; sim.pad(p); end = None
+        for _ in range(900):
+            sim.run(1)
+            if end is None and all(e.rb(bm.VSTATE + v) in (0, 3) for v in range(bm.NV)) and sim.t - t0 > 10: end = sim.t - t0
+        sim.pad(p, False); sim.run(20)
+        print('held %-4s 900 ms: voice stopped by itself after %s ms (sample 639 ms / ratio %.3f = %.0f ms)' % (
+            name, None if end is None else round(end), 2 ** ((p - bm.KEYS_ROOT) / 12), 639 / 2 ** ((p - bm.KEYS_ROOT) / 12)))
     sim.pad(7); sim.pad(14); sim.run(40); shots.append(('2 notes', sim.shot())); sim.run(100)
     sim.out = []; sim.run(100); f, pk = freq(sim.out); print('chord     peak %.3f' % pk)
     sim.pad(7, False); sim.pad(14, False); sim.run(50)
