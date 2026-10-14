@@ -775,6 +775,12 @@ No Roland DSP1 program touches slots 1/2 (they only use g[71]/g[75] in, g[72]/g[
 own can run **three effects at three different mix points at once** (e.g. input FX + loop FX + master FX), each slot
 placed with MIXER_PARAM(7, slot, code). Avoid g[68] (DSP0 reads g[69] as an input at word 0x16).
 
+**Pads -> channels (for loop faders, Looper v2):** the pad note-on 0x13735E goes through the object at @0x43B300
+(methods 0x13761C / 0x1375A8 / 0x13749E); a playing voice id gets its stream channel from 0x43B635[id], the
+channel's owner is 0x43B631[ch] (= id + 0x10), and the pad level lands per channel at 0x43B6C0[ch] (0x14EAA4).
+Pad starts do not write the mixer's channel LEVEL (index 11), so a fader on Tr.A-D (stock faders or ROUTING) keeps
+working while pads play; to give each loop its own fader the looper has to pin its layers to channels.
+
 ## Hardware buses
 | addr | what |
 |---|---|

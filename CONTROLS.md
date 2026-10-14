@@ -10,6 +10,10 @@ Sources:
 - **Event:** RAM `0x4278BA` (word). Low byte = logical code, `+0x100` = SHIFT held, `+0x4000` = release / second action.
 - **Is key held now:** `0x1313A6(code)`, which goes through the boot API `0x400494`.
 - **LED on/blink:** boot API `0x4004B8(code)` (inferred: the encoder test blinks REC/PLAY with it).
+- **LEDs (OS API, 2026-10-15):** `0x132866(code)` on, `0x132880(code)` off, blink variants 0x13289A / 0x1328E0 /
+  0x1328FC / 0x132934 / 0x132944; state bits 0x427390 + 2 * (code >> 4), mask table 0x16464E[code & 15]. 65 LEDs,
+  codes like the keys (pads 0x10-0x1F, LOC 0x40-0x43, EFX 0x50-0x54, STATUS 0x60-0x67 two per track); the factory
+  LED CHECK list is at 0x15F91E. Used by v1.91 (LAB LED SHOW, KEYS pad LEDs).
 
 | group | buttons → logical code |
 |---|---|
