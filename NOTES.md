@@ -249,6 +249,21 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.81 (1181, 2026-10-14): idle oscillators frozen, 7-seg R / M
+- **Hw report on v1.8:** synth notes play with the right envelope, but a background drone of the same wave sounds
+  under them ("similar issue to earlier with the sample keys mode", i.e. v1.71's idle voices). The model is silent
+  there. Reading: v1.72's hard mute (lvlk 0 + g 0) may have worked on hw through g = 0 alone (the sample read frozen
+  = DC), so idle voices may keep a level on hw; v1.8's oscillators don't stop with g, so they drone at the last notes.
+- **Fix 1:** the idle mute also writes og / og2 (phase feedback) = 0: phase = increment = constant (DC); unmute
+  writes 64 back (before the voice starts, same pass).
+- **Fix 2 (belt and braces):** TRI / PUL / JUNK moved 0xC0-0xC4 -> 0x9A-0x9E. No Roland DSP1 program (base + 20 FX)
+  uses IRAM 0xB0-0xEF (only DSP0 does; fx18 reaches 0xAF), so that range is unproven on DSP1. Voices 4-7 still keep
+  OPH1/OPH2 at 0xB0-0xBF: next suspect if the drone stays.
+- Shared mulcoeffs: DSP0's program writes only mc3 / mc4, the DSP1 base and FX only mc0-mc2: Roland partitions them,
+  which fits "DSP1 has no mc3" (DSP0 owns it). mc2 (our level) is safe.
+- **7-segment line:** R = Γ (segments a e f) instead of the small r; "MB LEFT" -> "MMB LEFT" (M = two digits, wide
+  M), the leading space dropped so 3-digit sizes still fit the 12 digits.
+
 ### v1.8 (1180, 2026-10-14): DDS-DSP, oscillators in every KEYS voice
 - v1.72 confirmed on hw ("works now"; one hang once after fast chords, didn't come back). Pushed (90ab838).
 - **New home tile DDS-DSP** (page P_DDS = 5, after S-EDIT; 6 tiles, the home view scrolls so the cursor stays on

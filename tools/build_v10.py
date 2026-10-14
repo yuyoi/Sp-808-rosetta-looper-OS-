@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1180, '1.8'               # 1.8 = DDS-DSP: oscillators per voice (1.72: PAD BANK, idle mute, +6 dB)
+VERSION, VER_TXT = 1181, '1.81'              # 1.81 = idle oscillators frozen, 7-seg R / M (1.8: DDS-DSP; 1.72: PAD BANK, idle mute)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -397,7 +397,7 @@ SEG_CHARS = {
     '8': 'abcdefg', '9': 'abcdfg', '-': 'g', '_': 'd', '=': 'dg',
     'A': 'abcefg', 'B': 'cdefg', 'C': 'adef', 'D': 'bcdeg', 'E': 'adefg', 'F': 'aefg', 'G': 'acdef', 'H': 'bcefg',
     'I': 'ef', 'J': 'bcde', 'K': 'bcefg', 'L': 'def', 'M': 'abcef', 'N': 'ceg', 'O': 'abcdef', 'P': 'abefg',
-    'Q': 'abcfg', 'R': 'eg', 'S': 'acdfg', 'T': 'defg', 'U': 'bcdef', 'V': 'cde', 'W': 'bcdef', 'X': 'bcefg',
+    'Q': 'abcfg', 'R': 'aef', 'S': 'acdfg', 'T': 'defg', 'U': 'bcdef', 'V': 'cde', 'W': 'bcdef', 'X': 'bcefg',
     'Y': 'bcdfg', 'Z': 'abdeg'}
 
 
@@ -1387,14 +1387,17 @@ def build():
     a.bsr16('draw')
     a.label('ki_out'); a.rts()
     a.label('ki_voices'); a.push_l(2)
-    for v in range(NV):                        # idle voices hard-muted: level smoothing 0 (L = t * 512 = 0 exactly) and
-        nx, um = uniq('vm'), uniq('vmu')       # the phase held at 0 (reads one fixed word = DC); back on as soon as busy
+    for v in range(NV):                        # idle voices hard-muted: level smoothing 0 (L = t * 512 = 0 exactly), the
+        nx, um = uniq('vm'), uniq('vmu')       # phase held at 0 (reads one fixed word = DC) and (v1.81) both oscillators
+                                               # frozen (phase feedback 0: phase = increment = DC; hw droned the last
+                                               # notes' saw like v1.71 did the samples); back on as soon as busy
         a.mov_b_from_abs(VSTATE + v, 'r0l'); a.mov_b_from_abs(VMUTE + v, 'r0h')
         a.cmp_b_imm(0, 'r0l'); a.bne(um)
         a.cmp_b_imm(0, 'r0h'); a.bne16(nx)
-        dsp_coef('v%d_lvlk' % v, 0); dsp_coef('v%d_g' % v, 0); set_byte(VMUTE + v, 1); a.bra16(nx)
+        dsp_coef('v%d_lvlk' % v, 0); dsp_coef('v%d_g' % v, 0)
+        dsp_coef('v%d_og' % v, 0); dsp_coef('v%d_og2' % v, 0); set_byte(VMUTE + v, 1); a.bra16(nx)
         a.label(um); a.cmp_b_imm(0, 'r0h'); a.beq16(nx)
-        dsp_coef('v%d_lvlk' % v, 63); set_byte(VMUTE + v, 0)
+        dsp_coef('v%d_lvlk' % v, 63); dsp_coef('v%d_og' % v, 64); dsp_coef('v%d_og2' % v, 64); set_byte(VMUTE + v, 0)
         a.label(nx)
     a.mov_b_from_abs(KAEP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kv_drain')        # AGE_E reset held >= 1 ms: release
     k_since(KAE_T); a.cmp_l_imm(2, 0); a.bcs('kv_drain')
@@ -2192,11 +2195,11 @@ def build():
     a.cmp_b_imm(0, 'r0l'); a.bne('sg_p1'); a.mov_l_imm('s_seg0', 4); a.bra('sg_put')
     a.label('sg_p1')
     a.cmp_b_imm(1, 'r0l'); a.bne('sg_p2'); a.mov_l_imm('s_seg1', 4); a.bra('sg_put')
-    a.label('sg_p2')                                            # "<n> MB LEFT"
-    a.mov_l_imm(SEGTXT, 1); putc(' ')
+    a.label('sg_p2')                                            # "<n> MB LEFT", M = 2 digits ("MM" = wide M)
+    a.mov_l_imm(SEGTXT, 1)
     a.bsr16('free_blk')
     for _ in range(5): a.shlr_w(0)                              # 32 blocks = 1 MB
-    a.bsr16('fmt_u'); puts_ram(' MB LEFT\0')
+    a.bsr16('fmt_u'); puts_ram(' MMB LEFT\0')
     a.mov_l_imm(SEGTXT, 4)
     a.label('sg_put')
     a.mov_b_imm(0, 'r0l'); a.jsr(SEG_POS)

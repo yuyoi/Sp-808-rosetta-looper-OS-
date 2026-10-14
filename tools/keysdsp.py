@@ -29,7 +29,8 @@ AGE_E, REF = 0x28, 0x2A                                 # age since the take's E
 VS, LP, BP, HP = 0x90, 0x92, 0x94, 0x96                 # voice sum (filter input), state-variable filter lp / bp / hp
 MIXF = 0x98                                             # the voices' output (filtered or dry), for the R channel
 OSC0 = 0xA0                                             # per voice: OPH1 (osc 1 phase) at OSC0 + 4v, OPH2 (unison) + 2
-TRI, PUL, JUNK = 0xC0, 0xC2, 0xC4                       # shared temps: osc 1 triangle / pulse, write-only side stores
+TRI, PUL, JUNK = 0x9A, 0x9C, 0x9E                       # shared temps: osc 1 triangle / pulse, write-only side stores
+                                                        # (v1.81: were 0xC0-0xC4; no Roland DSP1 program uses 0xB0-0xEF)
 SOFF = 0x2C                                             # loop start offset (16.8, raw): a voice with sel on starts there
 G1 = 0x50                                               # second global block: AGE_E, REF, the filter (before the voices)
 def vslot(v, k): return 0x30 + 12 * v + 2 * k          # per voice: PHI, LVL, NX, SMP, OUT, S1/S2 (head temps)

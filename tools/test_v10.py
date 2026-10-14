@@ -306,7 +306,9 @@ def main(image_path, out):
     st = [e.rb(bm.VSTATE + v) for v in range(bm.NV)]
     f, pk = freq(sim.out[-22000:])
     print('saw, pad 8 held 1 s: f = %.1f Hz (expect 261.6, C4) peak %.3f states %s (sustains past the take)' % (f, pk, st))
-    sim.pad(7, False); sim.run(400); print('  released:', [e.rb(bm.VSTATE + v) for v in range(bm.NV)])
+    sim.pad(7, False); sim.run(400); sim.out = []; sim.run(300)
+    print('  released:', [e.rb(bm.VSTATE + v) for v in range(bm.NV)], 'peak 0.4-0.7 s after release %.6f (expect 0)'
+          % (max(abs(y) for y in sim.out) / 0x7FFFFF))
     for _ in range(2): sim.key(bm.K_DOWN)                      # -> PW
     for _ in range(4): sim.key(bm.K_RIGHT)                     # PW 8 -> 12 (75 %)
     sim.key(bm.K_DOWN); sim.key(bm.K_DOWN)                     # -> UNISON
@@ -320,7 +322,8 @@ def main(image_path, out):
     o = [sim.prog[W('v%d_o2%s' % (v, ab))] & 0xFF for v in range(bm.NV) for ab in 'ab']
     f, pk = freq(sim.out[-13000:])
     print('pad 15 (+7) saw + unison: f = %.1f Hz (expect 392.0) peak %.3f; o2 fields a/b per voice %s' % (f, pk, o))
-    sim.pad(14, False); sim.run(400)
+    sim.pad(14, False); sim.run(400); sim.out = []; sim.run(300)
+    print('  released: peak 0.4-0.7 s after release %.6f (expect 0)' % (max(abs(y) for y in sim.out) / 0x7FFFFF))
     for _ in range(7): sim.key(bm.K_UP)                        # back to SAMPLE
     for _ in range(16): sim.key(bm.K_RIGHT)
     sim.key(bm.K_DOWN)
