@@ -785,6 +785,9 @@ placed with MIXER_PARAM(7, slot, code). Avoid g[68] (DSP0 reads g[69] as an inpu
 channel's owner is 0x43B631[ch] (= id + 0x10), and the pad level lands per channel at 0x43B6C0[ch] (0x14EAA4).
 Pad starts do not write the mixer's channel LEVEL (index 11), so a fader on Tr.A-D (stock faders or ROUTING) keeps
 working while pads play; to give each loop its own fader the looper has to pin its layers to channels.
+The binding happens in 0x14ED46(r6l = voice, r6h = channel; er1 = params): 0x43B62D[voice] = param +2, voice setup
+0x14EA28, then 0x43B635[ch] = voice, 0x43B631[voice] = ch + 0x10. The channel comes from its caller in the pad path
+(object method 0x13749E): the place to pin a layer to Tr.A-D for Looper v2 (per-loop faders / per-loop FX slots).
 
 ## Hardware buses
 | addr | what |
