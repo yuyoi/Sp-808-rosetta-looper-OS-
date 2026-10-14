@@ -466,8 +466,20 @@ MFX_TABS = [
                                                 ('SLOT %d LEVEL' % (k + 1), MLVL + k, 0, 127, 'mfx_levels', ('n',)))]),
     ('CONTROLS', [(nm, MCTRL + i, 0, len(MF_TGTS) - 1, 'mfx_ctrl_reset', ('s', 'mf_tgts', len(MF_TGTS)))
                   for i, (nm, ch) in enumerate(MF_SRC)])]
+KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BASE + 0x324, RAM_BASE + 0x326, RAM_BASE + 0x39C
+# S-EDIT (v1.91 on the Mac engine): rows in the old order (RELEASE, THRU, REVERSE, LOOP: ENTER still toggles), then
+# the knob-driven values read-only. One tab, so no submode menu.
+KSTAB = RAM_BASE + 0x45C
+KSET_TABS = [('KEYS SOUND', [('RELEASE', KREL, 0, len(REL_MS) - 1, None, ('t', 'rel_ms', 'MS')),
+                             ('THRU', KTHRU, 0, 1, 'kse_thru', ('s', 'mf_offon', 2)),
+                             ('REVERSE', KREV, 0, 1, 'kse_rev', ('s', 'mf_offon', 2)),
+                             ('LOOP', KLOOP, 0, 1, 'kse_loop', ('s', 'mf_offon', 2)),
+                             ('CUTOFF  (KNOB A)', KNOB, 0, 0, 'ro', ('cut',)),
+                             ('RESO  (KNOB B)', KNOB + 1, 0, 0, 'ro', ('n7',)),
+                             ('ATTACK  (KNOB C)', KATT, 0, 0, 'ro', ('t', 'att_ms', 'MS'))])]
 # Mac pages: pid, window name, [(submode description, items)], tab / row variables
-MAC_PAGES = [dict(pid='dd', name='DDS-DSP', tabs=[(DDS_DESC[ti], items) for ti, (_, items) in enumerate(DDS_TABS)],
+MAC_PAGES = [dict(pid='ks', name='S-EDIT', tabs=KSET_TABS, tab=KSTAB, cur=KSCUR, menu=False),
+             dict(pid='dd', name='DDS-DSP', tabs=[(DDS_DESC[ti], items) for ti, (_, items) in enumerate(DDS_TABS)],
                   tab=KDTAB, cur=KDCUR),
              dict(pid='rt', name='ROUTING', tabs=ROUTE_TABS, tab=RTAB, cur=RCUR),
              dict(pid='lb', name='LAB', tabs=LAB_TABS, tab=LTAB, cur=LCURX),
@@ -487,7 +499,6 @@ def sb_thumb(n): return max(3, round(22 * 3 / n))                       # scroll
 OSC_MIDI0, OSC_STEPS = 12, 16                                      # osc table: MIDI 12.. in 1/16 semitones (detune steps)
 OSC_TAB = b''.join(bytes(keysdsp.osc_fields(440 * 2 ** ((OSC_MIDI0 + i / OSC_STEPS - 69) / 12))) for i in range(110 * OSC_STEPS))
 # loop: a held note hands over to a fresh voice that starts at the loop start, 40 ms crossfade (source time)
-KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BASE + 0x324, RAM_BASE + 0x326, RAM_BASE + 0x39C
 VKEY, VLINK, VXF, VXL0 = RAM_BASE + 0x328, RAM_BASE + 0x330, RAM_BASE + 0x338, RAM_BASE + 0x340   # per voice (bytes)
 VXD, VLX, VXS = RAM_BASE + 0x348, RAM_BASE + 0x358, RAM_BASE + 0x378   # crossfade ms (words); next handoff, fade start (longs)
 # voice states: 0 idle, 1 waiting start, 2 held, 3 releasing, 4 attacking, 5 handing over (fade out),
@@ -681,7 +692,7 @@ def build():
     a.cmp_b_imm(P_HOME, 'r0l'); a.beq16('k_home')
     a.cmp_b_imm(P_MPC, 'r0l'); a.beq16('k_mpc')
     a.cmp_b_imm(P_KEYS, 'r0l'); a.beq16('k_keys')
-    a.cmp_b_imm(P_KSET, 'r0l'); a.beq16('k_kset')
+    a.cmp_b_imm(P_KSET, 'r0l'); a.beq16('k_ks')
     a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('k_dd')
     a.cmp_b_imm(P_ROUTE, 'r0l'); a.beq16('k_rt')
     a.cmp_b_imm(P_LAB, 'r0l'); a.beq16('k_lb')
@@ -806,29 +817,6 @@ def build():
     a.label('kk_exit2')
     a.bsr16('keys_exit')
 
-    a.label('k_kset')                                     # EDIT page: UP/DOWN pick RELEASE THRU REVERSE LOOP, dial/ENTER
-    a.cmp_w_imm(K_UP, 5); a.bne('kse_dn')
-    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l')
-    a.mov_b_to_abs('r0l', KSCUR); a.bra16('redraw')
-    a.label('kse_dn'); a.cmp_w_imm(K_DOWN, 5); a.bne('kse_v')
-    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(3, 'r0l'); a.beq16('redraw'); a.add_b_imm(1, 'r0l')
-    a.mov_b_to_abs('r0l', KSCUR); a.bra16('redraw')
-    a.label('kse_v')
-    a.cmp_w_imm(K_LEFT, 5); a.beq('kse_lr'); a.cmp_w_imm(K_RIGHT, 5); a.beq('kse_lr')
-    a.cmp_w_imm(K_ENTER, 5); a.bne16('k_other')
-    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw')       # ENTER toggles THRU / REVERSE / LOOP
-    a.label('kse_lr')
-    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kse_rel')
-    a.cmp_b_imm(3, 'r0l'); a.beq('kse_lp'); a.cmp_b_imm(1, 'r0l'); a.beq('kse_th')
-    a.bsr16('keys_rev_toggle'); a.bra16('redraw')
-    a.label('kse_th'); a.bsr16('keys_thru_toggle'); a.bra16('redraw')
-    a.label('kse_lp'); a.bsr16('keys_loop_toggle'); a.bra16('redraw')
-    a.label('kse_rel'); a.mov_b_from_abs(KREL, 'r0l')
-    a.cmp_w_imm(K_LEFT, 5); a.beq('kse_rd')
-    a.cmp_b_imm(len(REL_MS) - 1, 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l'); a.bra('kse_rs')
-    a.label('kse_rd'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l')
-    a.label('kse_rs'); a.mov_b_to_abs('r0l', KREL); a.bra16('redraw')
-
     for P_ in MAC_PAGES:                                  # Mac pages: ENTER = submode menu; UP/DOWN pick, dial changes
         pid, tabs, TAB, CURV = P_['pid'], P_['tabs'], P_['tab'], P_['cur']
         L = lambda x, pid=pid: '%s_%s' % (pid, x)
@@ -846,7 +834,17 @@ def build():
         a.label(L('kmok')); a.mov_b_to_abs('r0l', TAB); set_byte(CURV, 0); set_byte(KDMENU, 0); a.bra16('redraw')
         a.label(L('kpage'))                               # ---- parameter page
         a.cmp_w_imm(K_ENTER, 5); a.bne(L('kcus'))
-        a.mov_b_from_abs(TAB, 'r0l'); a.mov_b_to_abs('r0l', KDMSEL); set_byte(KDMENU, 1); a.bra16('redraw')
+        if P_.get('menu', True):
+            a.mov_b_from_abs(TAB, 'r0l'); a.mov_b_to_abs('r0l', KDMSEL); set_byte(KDMENU, 1); a.bra16('redraw')
+        else:                                             # no menu: ENTER flips the row's 0/1 value
+            a.mov_b_from_abs(CURV, 'r0l')
+            for i, (lbl, var, lo, hi, ap, disp) in enumerate(tabs[0][1]):
+                if (lo, hi) != (0, 1) or ap in (None, 'ro'): continue
+                nx = uniq('ket')
+                a.cmp_b_imm(i, 'r0l'); a.bne(nx)
+                a.mov_b_from_abs(var, 'r1l'); a.xor_b_imm(1, 'r1l'); a.mov_b_to_abs('r1l', var); a.bsr16(ap); a.bra16('redraw')
+                a.label(nx)
+            a.bra16('redraw')
         a.label(L('kcus'))
         customs = [(ti, it) for ti, (_, it) in enumerate(tabs) if isinstance(it, str)]
         if customs:                                       # own-body tabs: EXIT home, other keys to their handler
@@ -874,6 +872,7 @@ def build():
         for ti, (_, items) in enumerate(tabs):
             if isinstance(items, str): continue
             for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
+                if ap == 'ro': continue                   # read-only row: falls through to redraw
                 nx, dn, st = uniq('kdi'), uniq('kdd'), uniq('kds')
                 a.cmp_b_imm(ti, 'r1h'); a.bne16(nx); a.cmp_b_imm(i, 'r0l'); a.bne16(nx)
                 a.mov_b_from_abs(var, 'r1l')
@@ -927,7 +926,7 @@ def build():
     a.mov_b_from_abs(PAGE, 'r0l')
     a.cmp_b_imm(P_MPC, 'r0l'); a.beq16('d_mpc')
     a.cmp_b_imm(P_KEYS, 'r0l'); a.beq16('d_keys')
-    a.cmp_b_imm(P_KSET, 'r0l'); a.beq16('d_kset')
+    a.cmp_b_imm(P_KSET, 'r0l'); a.beq16('d_ks')
     a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('d_dd')
     a.cmp_b_imm(P_ROUTE, 'r0l'); a.beq16('d_rt')
     a.cmp_b_imm(P_LAB, 'r0l'); a.beq16('d_lb')
@@ -1057,46 +1056,13 @@ def build():
         a.label(nx)
     a.bra16('d_flush')
 
-    a.label('d_kset')                                     # EDIT page: the KEYS sound
+    # (S-EDIT is a Mac page since v1.91; these row helpers are shared)
     def row_put(text):
         for ch in text: a.mov_b_imm(ord(ch), 'r0l'); a.mov_b_st('r0l', 1); a.adds1(1)
     def row_num_word(table, idx_var):                    # decimal of table[idx_var] (16-bit words)
         a.mov_b_from_abs(idx_var, 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0)
         a.mov_l_imm(table, 2); a.add_l_rr(0, 2); a.mov_w_ld(2, 0); a.bsr16('fmt_u')
     def row_end(x, y): a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1); D.text(x, y, KROW, 'font_tiny')
-    D.text(1, 1, 's_kset')
-    a.mov_l_imm(KROW, 1); row_put('CUTOFF ')                                         # knob A
-    a.mov_b_from_abs(KNOB, 'r0l'); a.cmp_b_imm(127, 'r0l'); a.bcs('dks_cut')
-    row_put('OFF'); a.bra('dks_res')
-    a.label('dks_cut'); row_num_word('cut_hz', KNOB); row_put('HZ')
-    a.label('dks_res'); row_put('  RESO ')                                           # knob B
-    a.mov_b_from_abs(KNOB + 1, 'r0l'); a.and_b_imm(0x7F, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
-    row_end(5, 9)
-    a.mov_l_imm(KROW, 1); row_put('ATTACK '); row_num_word('att_ms', KATT); row_put('MS   KNOBS A B C')
-    row_end(5, 15)
-    a.mov_l_imm(KROW, 1); row_put('RELEASE '); row_num_word('rel_ms', KREL); row_put('MS'); row_end(5, 21)
-    a.mov_l_imm(KROW, 1); row_put('THRU ')
-    a.mov_b_from_abs(KTHRU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dks_ton')
-    row_put('OFF'); a.bra('dks_te')
-    a.label('dks_ton'); row_put('ON')
-    a.label('dks_te'); row_end(61, 21)
-    a.mov_l_imm(KROW, 1); row_put('REVERSE ')
-    a.mov_b_from_abs(KREV, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dks_on')
-    row_put('OFF'); a.bra('dks_e')
-    a.label('dks_on'); row_put('ON')
-    a.label('dks_e'); row_end(5, 27)
-    a.mov_l_imm(KROW, 1); row_put('LOOP ')
-    a.mov_b_from_abs(KLOOP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dks_lon')
-    row_put('OFF'); a.bra('dks_le')
-    a.label('dks_lon'); row_put('ON')
-    a.label('dks_le'); row_end(61, 27)
-    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dks_c1')
-    D.text(1, 21, 's_gt', 'font_tiny'); a.bra16('d_flush')
-    a.label('dks_c1'); a.cmp_b_imm(1, 'r0l'); a.bne('dks_c2')
-    D.text(57, 21, 's_gt', 'font_tiny'); a.bra16('d_flush')
-    a.label('dks_c2'); a.cmp_b_imm(2, 'r0l'); a.bne('dks_c3')
-    D.text(1, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
-    a.label('dks_c3'); D.text(57, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
 
     # ---- Mac pages (DDS-DSP, ROUTING): Classic Mac style window, list, submode menu ----
     def dval(var): a.mov_b_from_abs(var, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
@@ -1117,6 +1083,13 @@ def build():
             a.label(ok); a.extu_w(0); a.extu_l(0); a.shll_l2(0); a.mov_l_imm(disp[1], 2); a.add_l_rr(0, 2)
             a.mov_l_ind(2, 2); a.bsr16('row_str')
             a.label(end)
+        elif disp[0] == 'n7': a.mov_b_from_abs(var, 'r0l'); a.and_b_imm(0x7F, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
+        elif disp[0] == 'cut':                                  # knob A: OFF at 127, else the cutoff in Hz
+            o_, e_ = uniq('dco'), uniq('dce')
+            a.mov_b_from_abs(var, 'r0l'); a.cmp_b_imm(127, 'r0l'); a.bcc(o_)
+            row_num_word('cut_hz', var); row_put('HZ'); a.bra(e_)
+            a.label(o_); row_put('OFF')
+            a.label(e_)
         elif disp[0] == 'pan':                                  # 0..127: L64 .. C .. R63
             l_, c_, e_ = uniq('dpl'), uniq('dpc'), uniq('dpe')
             a.mov_b_from_abs(var, 'r2h'); a.cmp_b_imm(64, 'r2h'); a.beq(c_); a.bcs(l_)
@@ -1550,6 +1523,9 @@ def build():
     a.label('klf_rel'); a.mov_b_imm(3, 'r0l')
     a.label('klf_st'); st_b('r0l', VSTATE); vlevel_r6(); a.rts()
 
+    for lb_, var_, tg_ in (('kse_thru', KTHRU, 'keys_thru_toggle'), ('kse_rev', KREV, 'keys_rev_toggle'),
+                           ('kse_loop', KLOOP, 'keys_loop_toggle')):       # S-EDIT rows: back to the old value, toggle
+        a.label(lb_); a.mov_b_from_abs(var_, 'r0l'); a.xor_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', var_); a.bra16(tg_)
     a.label('keys_thru_toggle'); a.mov_b_from_abs(KTHRU, 'r0l'); a.xor_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', KTHRU)
     a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('ktt_out')
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.bne('ktt_out')
@@ -3533,7 +3509,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0),
                          (MSLOT, 12), (MSLOT + 1, 0), (MSLOT + 2, 0), (MLVL, 64), (MLVL + 1, 64), (MLVL + 2, 64),
                          *((MCTRL + i, 0) for i in range(6)), *((MCLAST + i, 0xFF) for i in range(6))):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)

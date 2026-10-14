@@ -275,6 +275,9 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   the sample end: the sample is cut there (the LA cut, VLAT = VSEND) and the oscillators hold the note. (Found by the
   suite: ENV DECAY/SUSTAIN with SAW + SAMPLE ended at the 439 ms take.)
 - Tests: `tools/test_route.py` (ROUTING presets / FX AT / mixer calls / dial step, LAB bars / channel / key names).
+- **S-EDIT on the Mac engine**: same rows and keys as before (RELEASE, THRU / REVERSE / LOOP with ENTER = toggle), then
+  CUTOFF / RESO / ATTACK (knobs A / B / C) as read-only rows; no submode menu (engine option `menu=False`, read-only
+  rows = apply 'ro'). `tools/test_kset.py` replays the old key sequences.
 - **MFX tile (interface + hooks; the sound blocks wait for ears + an audio loop):** our DSP1 program
   (`tools/mfxdsp.py`, table at DSP_BASE + 0x900) serves all **three** DSP0 insert slots; each slot is a stereo LEVEL
   block for now (64 = x1, 127 = x2, 0 = silent), which is enough to prove the slots on the unit by ear.
