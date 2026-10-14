@@ -32,6 +32,7 @@ SH7, SH6, SH5, SH3 = 0, 1, 2, 3                        # shift selector values
 
 def op30(mck, acc_b=False, clear=True, flip=False, neg=False, mem=0):
     """op 0x30: acc = i[mem] * mulcoeff[mck] (>>7); mck 6 = the ERAM variable-offset fraction. flip: (1 - mc)."""
+    assert mck in (0, 1, 2, 6), 'DSP1 (FX core) has mulcoeff mc0-mc2 (+ mc6 = ERAM fraction) only: mc%d' % mck
     coef = (mck << 5) | (0x10 if flip else 0) | (0x08 if neg else 0) | (0x02 if acc_b else 0) | (0 if clear else 1)
     return E(0x30, mem, SH7, coef)
 
@@ -67,7 +68,9 @@ def build(nvoices=NVOICES):
     for v in range(nvoices):
         b = V0 + VSTRIDE * v
         phi, lvl, nx, smp, out = (vslot(v, k) for k in (PHI, LVL, NX, SMP, OUT))
-        mck = 2 + (v & 1)                                      # mulcoeff register for the level (mc2/mc3 alternate)
+        mck = 2                                                # level mulcoeff: mc2 for every voice. The FX core (DSP1)
+                                                               # has no general mc3: Roland's 20 FX programs only write
+                                                               # mc0-mc2; odd voices on mc3 played at random levels on hw
         put(b + 0, E(0x04, lvl + 1, SH6, 63), 'v%d_lvlk' % v)   # A = L_old * 63/64
         put(b + 1, E(0x00, 3, SH7, 0), 'v%d_t' % v)             # A += 0x10000 * t >> 7 = t * 512 (target / 64)
         put(b + 2, E(0x14, phi + 1, SH6, 64), 'v%d_g' % v)      # B = PHI_old * 1    (0 = reset)

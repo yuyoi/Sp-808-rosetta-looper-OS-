@@ -201,6 +201,18 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   so the onset latency stays one main-loop pass). On the first hardware test read it off the screen: R must be 0C
   on the page (01 after EXIT), the readback should move with the pads' audio (0F low nibbles = sound).
 
+### Hardware results 2026-10-14 (v1.1 / v1.2) and v1.3
+- **KEYS works on the unit:** pitched across the pads, fast chords "sound great". Our own DSP1 program, on hw.
+- **mc3 does not exist as a general register on the FX core (DSP1).** Odd voices used mc3 for their level
+  (mc2/mc3 alternated): on hw their volume was wrong and ignored velocity, so velocity felt "opposite", staggered
+  notes came and went, only struck-together chords sounded right. Roland's 20 FX programs only ever write mc0-mc2
+  (mc0 88x, mc1 36x, mc2 33x); DSP0's voice engine does use mc3. v1.3 (1130): every voice on mc2. Rule: on DSP1
+  use mc0-mc2 (+ mc6 = the ERAM variable-offset fraction) only. The emulator models mc3 as generic, so it can't
+  catch this.
+- v1.2 fixes (emulator): recapture left used voices silent/DC (g = 0 and g = 64 on the same DSP sample; start now
+  waits >= 2 ms ticks); notes no longer redraw (a draw costs ms; dirty flag, redraw after the voices, max every 30 ms);
+  pick screen BANK/PAD, pad hit = capture via stock bank switch 0x137B5A; SHIFT+EXIT = re-pick.
+
 ### v1.1 (build 1110, 2026-10-13, emulator-tested, NOT on hw): MIDI keyboard, velocity, release
 - **Stock MIDI path found:** SCI0 is MIDI (0x1356D2 echoes RDR 0xFFFF7D to TDR = THRU). Byte parser 0x134B58:
   status -> handler pointer @0x427504 from the table at **0x164B88** (note-off 0x134D0C, note-on 0x134D46, poly AT

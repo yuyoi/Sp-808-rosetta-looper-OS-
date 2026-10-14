@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1121, '1.2'               # 1.2 = 1.1 + any bank: dial = bank, a pad hit captures it onto the keys; SHIFT+EXIT re-pick
+VERSION, VER_TXT = 1130, '1.3'               # 1.3 = 1.2 + every voice's level on mc2 (DSP1 has no general mc3)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
