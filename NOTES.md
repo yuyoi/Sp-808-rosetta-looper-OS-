@@ -305,6 +305,8 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   CONTRAST / FADER / POT / **BEAM CHECK (L + R sensors)** / FOOT SW / MIDI / Zip / IDE / **SCSI + DIGITAL (coax / optical)
   CHECK for an "SP808-OP1" option board** / ANALOG CHECK (Fs 44.1 / 32 kHz, LINE / PHONE, MASTER / AUX / M+A outputs,
   AUX IN) / LED CHECK / DEVICE CHECK (CPU, DRAM).
+- The factory DEVICE CHECK also runs an **ESP CHECK** (0x126C02, strings 0x160B1C): PRAM / IRAM / GRAM / ERAM of both
+  DSP cores, NG / OK each. The OS was built **Sep 20 1999 11:03:14** (string right after it).
 - D-Beam = ADC 9 / 10 read through curve tables (0x127A66 -> 0x426D12 pointers); 0x12780E = raw ADC n + 9.
 - **LEDs: 65, driven by code** (the same codes as the keys: pads 10-1F, LOC 40-43, EFX 50-54, STATUS 60-67 = A-D x 2
   colours?, F4 / C4-C9 / 30-31 = LED-only). API: 0x132866(code) on, 0x132880(code) off, 0x13289A / 0x1328E0 /
