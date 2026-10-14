@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1190, '1.9'               # 1.9 = DDS-DSP tabs OSC / LA / ENV (1.82: labels, POLY; 1.81: idle oscs frozen)
+VERSION, VER_TXT = 1191, '1.91'              # 1.91 = ROUTING page (mixer + FX location), Mac page engine (1.9: DDS tabs)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -388,9 +388,52 @@ DDS_DESC = ['OSCILLATORS', 'SAMPLE ATTACK', 'ENVELOPES']
 # Classic Mac style pages (user's pick): window, pinstriped title bar, 3-row scrolling list, values right-aligned;
 # ENTER = the full-screen submode menu
 KDMENU, KDMSEL, KDTOP, KDY = (RAM_BASE + 0x3DC + i for i in range(4))   # menu open, menu cursor, first row shown, row y
-DDS_STRS = ([('s_dtt%d' % ti, 'DDS-DSP: ' + DDS_DESC[ti]) for ti in range(len(DDS_TABS))] +
-            [('s_dsd%d' % ti, d) for ti, d in enumerate(DDS_DESC)] +
-            [('s_di%d_%d' % (ti, i), it[0]) for ti, (_, items) in enumerate(DDS_TABS) for i, it in enumerate(items)])
+# ROUTING (v1.91): Roland's own mixer (API 0x11F2AE(group, index, value), values in the tables 0x422018 + 0x2A * group,
+# 0x4220EA, 0x4220F0, 0x422108; NOTES "DSP0 mixer map") and the stock FX LOCATION setting (index 0x426DD1 into the
+# 16-entry table at 0x164D38, used while bit 7 of 0x426DD0 is set; 0x1361CE re-applies it like the stock menu does).
+RTAB, RCUR, RPRE, KSTEP = (RAM_BASE + 0x420 + i for i in range(4))   # routing tab / row / preset, dial step size
+MIXER_LOC_IDX, MIXER_LOC_FLAGS, FX_LOC_APPLY = 0x426DD1, 0x426DD0, 0x1361CE
+def mx(g, i): return (0x422018 + 0x2A * g if g < 5 else {5: 0x4220EA, 6: 0x4220F0, 7: 0x422108}[g]) + 2 * i + 1
+RT_LOC_NAMES = ['SEND/RETURN', 'INS MASTER', 'INS RECORD', 'INS AUX-OUT', 'MIC/LINE PRE-EQ', 'MIC/LINE POST',
+                'TR.A PRE-EQ', 'TR.A POST-EQ', 'TR.B PRE-EQ', 'TR.B POST-EQ', 'TR.C PRE-EQ', 'TR.C POST-EQ',
+                'TR.D PRE-EQ', 'TR.D POST-EQ', 'FX PATCH', 'OFF']
+RT_LOC_CODES = [1, 12, 13, 14, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, None, 0]        # mixer code per index (None: the patch's)
+RT_PRESETS = [('CUSTOM', None), ('DRY', 15), ('INPUT FX', 5), ('LOOP FX', 0), ('MASTER FX', 1), ('REC FX', 2),
+              ('FX PATCH', 14)]                                              # (name, FX LOCATION index)
+RT_TRK = ['TRACK A', 'TRACK B', 'TRACK C', 'TRACK D', 'INPUT']
+def mxi(label, g, i, disp=('n',)): return (label, mx(g, i), 0, 127, 'mx_%d_%d' % (g, i), disp)
+ROUTE_TABS = [
+    ('QUICK SETUP', [('PRESET', RPRE, 0, len(RT_PRESETS) - 1, 'rt_preset', ('s', 'rt_pren', len(RT_PRESETS))),
+                     ('FX AT', MIXER_LOC_IDX, 0, 15, 'rt_loc', ('s', 'rt_locn', 16)),
+                     mxi('FX RETURN', 5, 0), mxi('MASTER', 6, 0)]),
+    ('LEVELS', [mxi(RT_TRK[g], g, 11) for g in range(5)] + [mxi('REC BUS', 6, 2)]),
+    ('PAN', [mxi(RT_TRK[g], g, 12, ('pan',)) for g in range(5)]),
+    ('FX SENDS', [mxi(RT_TRK[g], g, 17) for g in range(5)] + [mxi('FX SEND MASTER', 6, 6)]),
+    ('AUX SENDS', [mxi(RT_TRK[g], g, 14) for g in range(5)] + [mxi('AUX MASTER', 6, 4)])]
+MX_ROUTINES = sorted({(int(it[4].split('_')[1]), int(it[4].split('_')[2])) for _, items in ROUTE_TABS for it in items
+                      if it[4].startswith('mx_')})
+# LAB (v1.91): hidden-hardware pages. ADC values: 14 raw bytes at 0x426CBE (stock 0x1277E8 returns them >> 1; the
+# factory BEAM CHECK reads channels 9 / 10 through curve tables, PARA-A/B/C = 6/7/8). Key names: the factory SW CHECK
+# table (9-byte entries: 5 chars, 0, LCD x/y, ?) at 0x15F9E8, aligned with the logical codes (words) at 0x16414C.
+LTAB, LCURX, LCH = RAM_BASE + 0x424, RAM_BASE + 0x425, RAM_BASE + 0x426
+LKEYW, LABT = RAM_BASE + 0x428, RAM_BASE + 0x42C
+ADC_TAB, ADC_N, SWNAMES, SWCODES, SW_N = 0x426CBE, 14, 0x15F9E8, 0x16414C, 67
+LAB_CH_NAMES = ['', '', '', '', '', '', 'PARA-A', 'PARA-B', 'PARA-C', 'BEAM L', 'BEAM R', 'FOOT SW?', '', '']
+LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt')]
+# Mac pages: pid, window name, [(submode description, items)], tab / row variables
+MAC_PAGES = [dict(pid='dd', name='DDS-DSP', tabs=[(DDS_DESC[ti], items) for ti, (_, items) in enumerate(DDS_TABS)],
+                  tab=KDTAB, cur=KDCUR),
+             dict(pid='rt', name='ROUTING', tabs=ROUTE_TABS, tab=RTAB, cur=RCUR),
+             dict(pid='lb', name='LAB', tabs=LAB_TABS, tab=LTAB, cur=LCURX)]   # a str instead of items: own body
+MAC_STRS = []
+for P_ in MAC_PAGES:
+    MAC_STRS += [('s_%snm' % P_['pid'], P_['name'])]
+    MAC_STRS += [('s_%st%d' % (P_['pid'], ti), P_['name'] + ': ' + d) for ti, (d, _) in enumerate(P_['tabs'])]
+    MAC_STRS += [('s_%sd%d' % (P_['pid'], ti), d) for ti, (d, _) in enumerate(P_['tabs'])]
+    MAC_STRS += [('s_%si%d_%d' % (P_['pid'], ti, i), it[0]) for ti, (_, items) in enumerate(P_['tabs'])
+                 if not isinstance(items, str) for i, it in enumerate(items)]
+MAC_STRS += [('s_lbc%d' % i, n) for i, n in enumerate(LAB_CH_NAMES)]
+MAC_STRS += [('s_rtl%d' % i, n) for i, n in enumerate(RT_LOC_NAMES)] + [('s_rtp%d' % i, n) for i, (n, _) in enumerate(RT_PRESETS)]
 def sb_thumb(n): return max(3, round(22 * 3 / n))                       # scroll bar thumb height for n rows
 OSC_MIDI0, OSC_STEPS = 12, 16                                      # osc table: MIDI 12.. in 1/16 semitones (detune steps)
 OSC_TAB = b''.join(bytes(keysdsp.osc_fields(440 * 2 ** ((OSC_MIDI0 + i / OSC_STEPS - 69) / 12))) for i in range(110 * OSC_STEPS))
@@ -410,11 +453,11 @@ LP_MSGS = [('s_lm1', 'BANK FULL'), ('s_lm2', '4 LAYERS MAX'), ('s_lm3', 'TAKE CA
 PLAY_ICON = ['X......', 'XXX....', 'XXXXX..', 'XXXXXXX', 'XXXXX..', 'XXX....', 'X......']
 STOP_ICON = ['.......', '.XXXXX.', '.XXXXX.', '.XXXXX.', '.XXXXX.', '.XXXXX.', '.......']
 MAGIC = 0x4A535721
-P_HOME, P_MPC, P_LOOP, P_KEYS, P_KSET, P_DDS = 0, 1, 2, 3, 4, 5
+P_HOME, P_MPC, P_LOOP, P_KEYS, P_KSET, P_DDS, P_ROUTE, P_LAB = 0, 1, 2, 3, 4, 5, 6, 7
 SM_NEXT, SM_CLASSIC, SM_TAP, SM_HOLD = 0, 1, 2, 3
 MS_IDLE, MS_ARMED, MS_REC = 0, 1, 2
 
-TILES = [('mpc', 'MPC'), ('loop', 'LOOP'), ('keys', 'KEYS'), ('edit', 'S-EDIT'), ('dds', 'DDS-DSP'), ('sys', 'SYS')]   # 4 shown, scrolls
+TILES = [('mpc', 'MPC'), ('loop', 'LOOP'), ('keys', 'KEYS'), ('edit', 'S-EDIT'), ('dds', 'DDS-DSP'), ('route', 'ROUTING'), ('lab', 'LAB'), ('sys', 'SYS')]   # 4 shown, scrolls
 SMODE_NAMES = ['NEXT FREE', 'CLASSIC', 'TAP', 'HOLD']
 POPUPS = [('s_bankfull', 'BANK FULL'), ('s_pickpad', 'HIT A PAD FIRST'), ('s_canceled', 'TAKE CANCELED')]   # MSG 1-3
 GRID_X, GRID_Y = 99, 1                      # 4x4 pad map, 6 px pads, 1 px gaps
@@ -533,6 +576,7 @@ def build():
     a.bsr16('seg_tick')                           # 7-segment line ticker
     a.bsr16('lp_idle')                            # looper clock, layer starts, LOOP page refresh
     a.bsr16('keys_idle')                          # KEYS: sampling timer / onset, pending note-ons
+    a.bsr16('lab_idle')                           # LAB: live analog bars
     a.mov_b_from_abs(BOOTSND, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('id_dial')   # boot sound: pad 16, once
     set_byte(BOOTSND, 1)
     a.mov_w_imm(BOOT_PAD, 0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
@@ -543,10 +587,16 @@ def build():
     a.cmp_b_imm(P_KEYS, 'r1l'); a.beq('id_mpc')
     a.cmp_b_imm(P_KSET, 'r1l'); a.beq('id_mpc')
     a.cmp_b_imm(P_DDS, 'r1l'); a.beq('id_mpc')
+    a.cmp_b_imm(P_ROUTE, 'r1l'); a.beq('id_mpc')
+    a.cmp_b_imm(P_LAB, 'r1l'); a.beq('id_mpc')
     a.cmp_b_imm(P_HOME, 'r1l'); a.bne16('done')
     a.mov_w_imm(K_DOWN, 5); a.mov_w_rr(0, 0); a.bpl('id_key')
     a.mov_w_imm(K_UP, 5); a.bra('id_key')
-    a.label('id_mpc')
+    a.label('id_mpc')                             # dial speed = step size for wide values (1..8)
+    a.mov_b_rr('r0l', 'r1l'); a.mov_w_rr(0, 0); a.bpl('idm_p')
+    a.mov_b_imm(0, 'r1l'); a.sub_b_rr('r0l', 'r1l')
+    a.label('idm_p'); a.cmp_b_imm(9, 'r1l'); a.bcs('idm_s'); a.mov_b_imm(8, 'r1l')
+    a.label('idm_s'); a.mov_b_to_abs('r1l', KSTEP)
     a.mov_w_imm(K_RIGHT, 5); a.mov_w_rr(0, 0); a.bpl('id_key')
     a.mov_w_imm(K_LEFT, 5)
     a.label('id_key'); a.bra16('key2')
@@ -571,6 +621,7 @@ def build():
     a.bra16('redraw')
 
     a.label('key')
+    set_byte(KSTEP, 1)                                    # buttons step 1
     a.mov_w_from_abs(KEY_EVENT, 5)
     a.label('key2')                                       # r5 = key (real or from the dial)
     set_byte(MSG, 0)
@@ -579,7 +630,9 @@ def build():
     a.cmp_b_imm(P_MPC, 'r0l'); a.beq16('k_mpc')
     a.cmp_b_imm(P_KEYS, 'r0l'); a.beq16('k_keys')
     a.cmp_b_imm(P_KSET, 'r0l'); a.beq16('k_kset')
-    a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('k_dds')
+    a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('k_dd')
+    a.cmp_b_imm(P_ROUTE, 'r0l'); a.beq16('k_rt')
+    a.cmp_b_imm(P_LAB, 'r0l'); a.beq16('k_lb')
     a.cmp_b_imm(P_LOOP, 'r0l'); a.bne16('k_other')
     a.cmp_w_imm(K_ENTER, 5); a.bne('kl_nent')                     # LOOP page: ENTER = debug trace on/off
     a.mov_b_from_abs(LDEBUG, 'r0l'); a.xor_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', LDEBUG); a.bra16('redraw')
@@ -723,49 +776,70 @@ def build():
     a.label('kse_rd'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l')
     a.label('kse_rs'); a.mov_b_to_abs('r0l', KREL); a.bra16('redraw')
 
-    a.label('k_dds')                                      # DDS-DSP: ENTER = submode menu; UP/DOWN pick, dial changes
-    a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('kd_page')
-    a.mov_b_from_abs(KDMSEL, 'r0l')                       # ---- submode menu: UP/DOWN/dial pick, ENTER opens, EXIT back
-    a.cmp_w_imm(K_UP, 5); a.beq('kdm_up'); a.cmp_w_imm(K_LEFT, 5); a.beq('kdm_up')
-    a.cmp_w_imm(K_DOWN, 5); a.beq('kdm_dn'); a.cmp_w_imm(K_RIGHT, 5); a.beq('kdm_dn')
-    a.cmp_w_imm(K_ENTER, 5); a.beq('kdm_ok')
-    a.cmp_w_imm(K_EXIT, 5); a.bne16('done')
-    set_byte(KDMENU, 0); a.bra16('redraw')
-    a.label('kdm_up'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l'); a.bra('kdm_st')
-    a.label('kdm_dn'); a.cmp_b_imm(len(DDS_TABS) - 1, 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l')
-    a.label('kdm_st'); a.mov_b_to_abs('r0l', KDMSEL); a.bra16('redraw')
-    a.label('kdm_ok'); a.mov_b_to_abs('r0l', KDTAB); set_byte(KDCUR, 0); set_byte(KDMENU, 0); a.bra16('redraw')
-    a.label('kd_page')                                    # ---- parameter page
-    a.cmp_w_imm(K_ENTER, 5); a.bne('kd_up')
-    a.mov_b_from_abs(KDTAB, 'r0l'); a.mov_b_to_abs('r0l', KDMSEL); set_byte(KDMENU, 1); a.bra16('redraw')
-    a.label('kd_up'); a.cmp_w_imm(K_UP, 5); a.bne('kd_dn')
-    a.mov_b_from_abs(KDCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l')
-    a.mov_b_to_abs('r0l', KDCUR); a.bra16('redraw')
-    a.label('kd_dn'); a.cmp_w_imm(K_DOWN, 5); a.bne16('kd_v')
-    a.mov_b_from_abs(KDTAB, 'r1l')
-    for ti, (tn, items) in enumerate(DDS_TABS):
-        nx = uniq('kdt')
-        a.cmp_b_imm(ti, 'r1l'); a.bne(nx); a.mov_b_imm(len(items) - 1, 'r1h'); a.bra('kd_dmax')
-        a.label(nx)
-    a.bra16('redraw')
-    a.label('kd_dmax')
-    a.mov_b_from_abs(KDCUR, 'r0l'); a.cmp_b_rr('r1h', 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l')
-    a.mov_b_to_abs('r0l', KDCUR); a.bra16('redraw')
-    a.label('kd_v'); a.cmp_w_imm(K_LEFT, 5); a.beq('kd_lr'); a.cmp_w_imm(K_RIGHT, 5); a.bne16('k_other')
-    a.label('kd_lr'); a.mov_b_from_abs(KDTAB, 'r1h'); a.mov_b_from_abs(KDCUR, 'r0l')
-    for ti, (tn, items) in enumerate(DDS_TABS):
-        for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
-            nx, dn, st = uniq('kdi'), uniq('kdd'), uniq('kds')
-            a.cmp_b_imm(ti, 'r1h'); a.bne16(nx); a.cmp_b_imm(i, 'r0l'); a.bne16(nx)
-            a.mov_b_from_abs(var, 'r1l')
-            a.cmp_w_imm(K_RIGHT, 5); a.bne(dn)
-            a.cmp_b_imm(hi, 'r1l'); a.bcc16('redraw'); a.add_b_imm(1, 'r1l'); a.bra(st)
-            a.label(dn); a.cmp_b_imm(lo, 'r1l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r1l')
-            a.label(st); a.mov_b_to_abs('r1l', var)
-            if ap: a.bsr16(ap)
-            a.bra16('redraw')
+    for P_ in MAC_PAGES:                                  # Mac pages: ENTER = submode menu; UP/DOWN pick, dial changes
+        pid, tabs, TAB, CURV = P_['pid'], P_['tabs'], P_['tab'], P_['cur']
+        L = lambda x, pid=pid: '%s_%s' % (pid, x)
+        a.label('k_' + pid)
+        a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16(L('kpage'))
+        a.mov_b_from_abs(KDMSEL, 'r0l')                   # ---- submode menu: UP/DOWN/dial pick, ENTER opens, EXIT back
+        a.cmp_w_imm(K_UP, 5); a.beq(L('kmu')); a.cmp_w_imm(K_LEFT, 5); a.beq(L('kmu'))
+        a.cmp_w_imm(K_DOWN, 5); a.beq(L('kmd')); a.cmp_w_imm(K_RIGHT, 5); a.beq(L('kmd'))
+        a.cmp_w_imm(K_ENTER, 5); a.beq(L('kmok'))
+        a.cmp_w_imm(K_EXIT, 5); a.bne16('done')
+        set_byte(KDMENU, 0); a.bra16('redraw')
+        a.label(L('kmu')); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l'); a.bra(L('kmst'))
+        a.label(L('kmd')); a.cmp_b_imm(len(tabs) - 1, 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l')
+        a.label(L('kmst')); a.mov_b_to_abs('r0l', KDMSEL); a.bra16('redraw')
+        a.label(L('kmok')); a.mov_b_to_abs('r0l', TAB); set_byte(CURV, 0); set_byte(KDMENU, 0); a.bra16('redraw')
+        a.label(L('kpage'))                               # ---- parameter page
+        a.cmp_w_imm(K_ENTER, 5); a.bne(L('kcus'))
+        a.mov_b_from_abs(TAB, 'r0l'); a.mov_b_to_abs('r0l', KDMSEL); set_byte(KDMENU, 1); a.bra16('redraw')
+        a.label(L('kcus'))
+        customs = [(ti, it) for ti, (_, it) in enumerate(tabs) if isinstance(it, str)]
+        if customs:                                       # own-body tabs: EXIT home, other keys to their handler
+            a.mov_b_from_abs(TAB, 'r0l')
+            for ti, cl in customs:
+                nx = uniq('kct'); a.cmp_b_imm(ti, 'r0l'); a.bne(nx)
+                a.cmp_w_imm(K_EXIT, 5); a.beq16('k_other'); a.bra16(cl + '_k')
+                a.label(nx)
+        a.label(L('kup')); a.cmp_w_imm(K_UP, 5); a.bne(L('kdn'))
+        a.mov_b_from_abs(CURV, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l')
+        a.mov_b_to_abs('r0l', CURV); a.bra16('redraw')
+        a.label(L('kdn')); a.cmp_w_imm(K_DOWN, 5); a.bne16(L('kv'))
+        a.mov_b_from_abs(TAB, 'r1l')
+        for ti, (_, items) in enumerate(tabs):
+            if isinstance(items, str): continue
+            nx = uniq('kdt')
+            a.cmp_b_imm(ti, 'r1l'); a.bne(nx); a.mov_b_imm(len(items) - 1, 'r1h'); a.bra16(L('kdmax'))
             a.label(nx)
-    a.bra16('redraw')
+        a.bra16('redraw')
+        a.label(L('kdmax'))
+        a.mov_b_from_abs(CURV, 'r0l'); a.cmp_b_rr('r1h', 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l')
+        a.mov_b_to_abs('r0l', CURV); a.bra16('redraw')
+        a.label(L('kv')); a.cmp_w_imm(K_LEFT, 5); a.beq(L('klr')); a.cmp_w_imm(K_RIGHT, 5); a.bne16('k_other')
+        a.label(L('klr')); a.mov_b_from_abs(TAB, 'r1h'); a.mov_b_from_abs(CURV, 'r0l')
+        for ti, (_, items) in enumerate(tabs):
+            if isinstance(items, str): continue
+            for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
+                nx, dn, st = uniq('kdi'), uniq('kdd'), uniq('kds')
+                a.cmp_b_imm(ti, 'r1h'); a.bne16(nx); a.cmp_b_imm(i, 'r0l'); a.bne16(nx)
+                a.mov_b_from_abs(var, 'r1l')
+                if hi - lo > 31:                          # wide range: the dial's speed is the step (keys: 1)
+                    lo_ = uniq('kdl')
+                    a.mov_b_from_abs(KSTEP, 'r0h')
+                    a.cmp_w_imm(K_RIGHT, 5); a.bne(dn)
+                    a.add_b_rr('r0h', 'r1l'); a.cmp_b_imm(hi + 1, 'r1l'); a.bcs(st); a.mov_b_imm(hi, 'r1l'); a.bra(st)
+                    a.label(dn); a.sub_b_rr('r0h', 'r1l'); a.bcs(lo_); a.cmp_b_imm(lo, 'r1l'); a.bcc(st)
+                    a.label(lo_); a.mov_b_imm(lo, 'r1l')
+                else:
+                    a.cmp_w_imm(K_RIGHT, 5); a.bne(dn)
+                    a.cmp_b_imm(hi, 'r1l'); a.bcc16('redraw'); a.add_b_imm(1, 'r1l'); a.bra(st)
+                    a.label(dn); a.cmp_b_imm(lo, 'r1l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r1l')
+                a.label(st); a.mov_b_to_abs('r1l', var)
+                if ap: a.bsr16(ap)
+                a.bra16('redraw')
+                a.label(nx)
+        a.bra16('redraw')
 
     a.label('k_other')
     a.cmp_w_imm(K_EXIT, 5); a.bne16('done')
@@ -801,7 +875,9 @@ def build():
     a.cmp_b_imm(P_MPC, 'r0l'); a.beq16('d_mpc')
     a.cmp_b_imm(P_KEYS, 'r0l'); a.beq16('d_keys')
     a.cmp_b_imm(P_KSET, 'r0l'); a.beq16('d_kset')
-    a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('d_dds')
+    a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('d_dd')
+    a.cmp_b_imm(P_ROUTE, 'r0l'); a.beq16('d_rt')
+    a.cmp_b_imm(P_LAB, 'r0l'); a.beq16('d_lb')
     # ---- HOME: 4 of the icon tiles; the view scrolls so the cursor's tile is always on screen ----
     a.mov_b_from_abs(CUR, 'r0l')
     for first in range(1, len(TILES) - 3): a.cmp_b_imm(3 + first, 'r0l'); a.beq16('dh_v%d' % first)
@@ -968,7 +1044,7 @@ def build():
     D.text(1, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
     a.label('dks_c3'); D.text(57, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
 
-    a.label('d_dds')                                      # DDS-DSP, Classic Mac style (window, list, submode menu)
+    # ---- Mac pages (DDS-DSP, ROUTING): Classic Mac style window, list, submode menu ----
     def dval(var): a.mov_b_from_abs(var, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
     def doct():
         neg, zero, out = uniq('dn'), uniq('dz'), uniq('de')
@@ -981,12 +1057,31 @@ def build():
         if disp[0] == 'n': dval(var)
         elif disp[0] == 'oct': doct()
         elif disp[0] == 't': row_num_word(disp[1], var); row_put(disp[2])
+        elif disp[0] == 's':                                    # a name: table of string pointers, ? when out of range
+            ok, end = uniq('dso'), uniq('dse')
+            a.mov_b_from_abs(var, 'r0l'); a.cmp_b_imm(disp[2], 'r0l'); a.bcs(ok); row_put('?'); a.bra16(end)
+            a.label(ok); a.extu_w(0); a.extu_l(0); a.shll_l2(0); a.mov_l_imm(disp[1], 2); a.add_l_rr(0, 2)
+            a.mov_l_ind(2, 2); a.bsr16('row_str')
+            a.label(end)
+        elif disp[0] == 'pan':                                  # 0..127: L64 .. C .. R63
+            l_, c_, e_ = uniq('dpl'), uniq('dpc'), uniq('dpe')
+            a.mov_b_from_abs(var, 'r2h'); a.cmp_b_imm(64, 'r2h'); a.beq(c_); a.bcs(l_)
+            row_put('R'); a.mov_b_rr('r2h', 'r0l'); a.add_b_imm(0xC0, 'r0l'); a.extu_w(0); a.bsr16('fmt_u'); a.bra(e_)
+            a.label(l_); row_put('L'); a.mov_b_imm(64, 'r0l'); a.sub_b_rr('r2h', 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
+            a.bra(e_)
+            a.label(c_); row_put('C')
+            a.label(e_)
         else:                                                   # 'o': OFF at 0
             off, end = uniq('ddo'), uniq('dde')
             a.mov_b_from_abs(var, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16(off)
             row_num_word(disp[1], var); row_put(disp[2]); a.bra16(end)
             a.label(off); row_put('OFF')
             a.label(end)
+    def scroll_bar(table, n):                               # track + thumb (y from table[KDTOP])
+        D.fill(124, 9, 1, 22)
+        a.mov_b_from_abs(KDTOP, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(table, 1); a.add_l_rr(0, 1)
+        a.mov_b_ld(1, 'r1h'); a.mov_b_imm(123, 'r1l'); a.mov_b_imm(3, 'r2l'); a.mov_b_imm(sb_thumb(n), 'r2h')
+        a.bsr16('gfx_fill')
     def mac_window(title, nchars):                          # frame, pinstriped title bar, close box, title
         D.frame(0, 0, 128, 32)
         for y in (2, 4, 6): D.fill(2, y, 124, 1)
@@ -1006,42 +1101,44 @@ def build():
         a.cmp_b_imm(3, 'r1l'); a.bcc16(skip)
         a.mov_b_rr('r1l', 'r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.sub_b_rr('r1l', 'r0l')
         a.add_b_imm(10, 'r0l'); a.mov_b_to_abs('r0l', KDY)
-    a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('dd_page')
-    mac_window('s_dds', 7)                                  # ---- submode menu (full screen)
-    set_top(KDMSEL, len(DDS_TABS))
-    for ti, (tn, items) in enumerate(DDS_TABS):
-        sk = uniq('dms')
-        row_y(ti, sk)
-        a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_dsd%d' % ti, 'font_tiny')   # full name
-        a.mov_b_imm(118, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_gt', 'font_tiny')   # enterable: arrow
-        a.mov_b_from_abs(KDMSEL, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(sk)
-        a.bsr16('dd_rinv')
-        a.label(sk)
-    a.bra16('d_flush')
-    a.label('dd_page')                                      # ---- parameter page of the current submode
-    for ti, (tn, items) in enumerate(DDS_TABS):
-        nt = uniq('ddn')
-        nit = len(items)
-        a.mov_b_from_abs(KDTAB, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(nt)
-        mac_window('s_dtt%d' % ti, len('DDS-DSP: ' + DDS_DESC[ti]))
-        set_top(KDCUR, nit)
-        for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
-            sk = uniq('dvs')
-            row_y(i, sk)
-            a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_di%d_%d' % (ti, i), 'font_tiny')
-            a.mov_l_imm(KROW, 1); dshow(var, disp); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
-            a.bsr16('dd_rval')
-            a.mov_b_from_abs(KDCUR, 'r0l'); a.cmp_b_imm(i, 'r0l'); a.bne16(sk)
+    for P_ in MAC_PAGES:
+        pid, tabs, TAB, CURV = P_['pid'], P_['tabs'], P_['tab'], P_['cur']
+        a.label('d_' + pid)
+        a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16(pid + '_dpage')
+        mac_window('s_%snm' % pid, len(P_['name']))       # ---- submode menu (full screen)
+        set_top(KDMSEL, len(tabs))
+        for ti in range(len(tabs)):
+            sk = uniq('dms')
+            row_y(ti, sk)
+            a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_%sd%d' % (pid, ti), 'font_tiny')   # full name
+            a.mov_b_imm(118, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_gt', 'font_tiny')   # enterable: arrow
+            a.mov_b_from_abs(KDMSEL, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(sk)
             a.bsr16('dd_rinv')
             a.label(sk)
-        if nit > 3:                                         # scroll bar: track + thumb
-            D.fill(124, 9, 1, 22)
-            a.mov_b_from_abs(KDTOP, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm('dd_sb%d' % ti, 1); a.add_l_rr(0, 1)
-            a.mov_b_ld(1, 'r1h'); a.mov_b_imm(123, 'r1l'); a.mov_b_imm(3, 'r2l'); a.mov_b_imm(sb_thumb(nit), 'r2h')
-            a.bsr16('gfx_fill')
+        if len(tabs) > 3: scroll_bar('%s_sbm' % pid, len(tabs))
         a.bra16('d_flush')
-        a.label(nt)
-    a.bra16('d_flush')
+        a.label(pid + '_dpage')                           # ---- parameter page of the current submode
+        for ti, (desc, items) in enumerate(tabs):
+            nt = uniq('ddn')
+            nit = len(items)
+            a.mov_b_from_abs(TAB, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(nt)
+            mac_window('s_%st%d' % (pid, ti), len(P_['name'] + ': ' + desc))
+            if isinstance(items, str):
+                a.bsr16(items + '_d'); a.bra16('d_flush'); a.label(nt); continue
+            set_top(CURV, nit)
+            for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
+                sk = uniq('dvs')
+                row_y(i, sk)
+                a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_%si%d_%d' % (pid, ti, i), 'font_tiny')
+                a.mov_l_imm(KROW, 1); dshow(var, disp); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+                a.bsr16('dd_rval')
+                a.mov_b_from_abs(CURV, 'r0l'); a.cmp_b_imm(i, 'r0l'); a.bne16(sk)
+                a.bsr16('dd_rinv')
+                a.label(sk)
+            if nit > 3: scroll_bar('%s_sb%d' % (pid, ti), nit)
+            a.bra16('d_flush')
+            a.label(nt)
+        a.bra16('d_flush')
     a.label('dd_rval')                                      # KROW right-aligned (ends at x 121) on row KDY
     a.mov_l_imm(KROW, 3); a.mov_b_imm(0, 'r2l')
     a.label('ddr_n'); a.mov_b_ldinc(3, 'r0l'); a.beq('ddr_e'); a.inc_b('r2l'); a.bra('ddr_n')
@@ -1752,7 +1849,15 @@ def build():
     a.mov_b_from_abs(KMXS, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('kn_smp')
     a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VEND); a.bra16('kn_noloop')                  # synth only: held = sounding
     a.label('kn_smp')
-    a.mov_b_from_abs(KLOOP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('kn_noloop')
+    a.mov_b_from_abs(KLOOP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('kn_lp')
+    a.mov_b_from_abs(KMXSAW, 'r0l')                                                   # v1.91: sample + oscillators:
+    for v_ in (KMXPUL, KMXTRI, KMXUNI): a.mov_b_from_abs(v_, 'r0h'); a.or_b_rr('r0h', 'r0l')   # the sample plays once
+    a.beq16('kn_noloop')                                                             # (cut at its end, the LA way),
+    vptr(VSEND, 4); a.mov_l_ind(1, 0); st_l(0, VLAT)                                 # the oscillators hold the note
+    a.mov_b_imm(1, 'r0l'); st_b('r0l', VLAS)
+    a.mov_b_from_abs(KMXS, 'r0l'); a.shll_b('r0l'); a.shll_b('r0l'); st_b('r0l', VLAC)
+    a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VEND); a.bra16('kn_noloop')
+    a.label('kn_lp')
     a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VEND)                                        # looping: never runs out
     a.mov_b_rr('r4l', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0)
     a.mov_l_imm('inv_ratio', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 1)                  # r1 = 4096 / ratio
@@ -2360,6 +2465,100 @@ def build():
     a.add_b_imm(0x30, 'r0l'); a.mov_b_st('r0l', 1); a.adds1(1)
     a.add_b_imm(0x30, 'r0h'); a.mov_b_st('r0h', 1); a.adds1(1)
     a.rts()
+    # ---- LAB: ANALOG INPUTS = 14 live bars (raw ADC >> 4), the selected one inverted, its name and value below ----
+    a.label('lab_an_d')
+    D.fill(1, 25, 126, 1)                                       # baseline
+    for ch in range(ADC_N):
+        sk = uniq('lan')
+        a.mov_b_from_abs(ADC_TAB + ch, 'r0l'); a.shlr_b('r0l'); a.shlr_b('r0l'); a.shlr_b('r0l'); a.shlr_b('r0l')
+        a.beq(sk)
+        a.mov_b_rr('r0l', 'r2h'); a.mov_b_imm(25, 'r1h'); a.sub_b_rr('r0l', 'r1h')
+        a.mov_b_imm(2 + 9 * ch, 'r1l'); a.mov_b_imm(7, 'r2l'); a.bsr16('gfx_fill')
+        a.label(sk)
+    D.mode(gfxlib.M_INV)                                        # selected channel: its column inverted
+    a.mov_b_from_abs(LCH, 'r1l'); a.mov_b_rr('r1l', 'r0l'); a.shll_b('r1l'); a.shll_b('r1l'); a.shll_b('r1l')
+    a.add_b_rr('r0l', 'r1l'); a.add_b_imm(1, 'r1l'); a.mov_b_imm(10, 'r1h'); a.mov_b_imm(9, 'r2l'); a.mov_b_imm(15, 'r2h')
+    a.bsr16('gfx_fill'); D.mode(gfxlib.M_SET)
+    a.mov_l_imm(KROW, 1); row_put('CH ')
+    a.mov_b_from_abs(LCH, 'r0l'); a.extu_w(0); a.bsr16('fmt_u'); row_put(' ')
+    a.mov_b_from_abs(LCH, 'r0l'); a.extu_w(0); a.extu_l(0); a.shll_l2(0); a.mov_l_imm('lab_chn', 2); a.add_l_rr(0, 2)
+    a.mov_l_ind(2, 2); a.bsr16('row_str'); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+    D.text(4, 26, KROW, 'font_tiny')
+    a.mov_l_imm(KROW, 1)
+    a.mov_b_from_abs(LCH, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(ADC_TAB, 2); a.add_l_rr(0, 2)
+    a.mov_b_ld(2, 'r0l'); a.extu_w(0); a.bsr16('fmt_u'); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+    a.mov_b_imm(26, 'r0l'); a.mov_b_to_abs('r0l', KDY); a.bsr16('dd_rval')
+    a.rts()
+    a.label('lab_an_k')                                         # arrows / dial: pick the channel
+    a.mov_b_from_abs(LCH, 'r0l')
+    a.cmp_w_imm(K_RIGHT, 5); a.beq('lak_up'); a.cmp_w_imm(K_DOWN, 5); a.beq('lak_up')
+    a.cmp_w_imm(K_LEFT, 5); a.beq('lak_dn'); a.cmp_w_imm(K_UP, 5); a.bne('lab_jdone')
+    a.label('lak_dn'); a.cmp_b_imm(0, 'r0l'); a.beq('lab_jrd'); a.add_b_imm(0xFF, 'r0l'); a.bra('lak_st')
+    a.label('lak_up'); a.cmp_b_imm(ADC_N - 1, 'r0l'); a.bcc('lab_jrd'); a.add_b_imm(1, 'r0l')
+    a.label('lak_st'); a.mov_b_to_abs('r0l', LCH)
+    a.label('lab_jrd'); a.jmp('redraw')                         # (the key handler's exits are > 32 KB away)
+    a.label('lab_jdone'); a.jmp('done')
+    # ---- LAB: BUTTONS = the last key event: code, its factory name, press / release ----
+    a.label('lab_bt_d')
+    a.mov_l_imm(KROW, 1); row_put('LAST KEY  ')
+    a.mov_w_from_abs(LKEYW, 0); a.mov_w_rr(0, 0); a.bne('lbd_k'); row_put('-'); a.bra16('lbd_e')
+    a.label('lbd_k')
+    a.push_l(4); a.mov_b_rr('r0l', 'r4l'); a.mov_b_imm(SW_N, 'r4h')    # r4l = code, r4h = entries left
+    a.mov_l_imm(SWCODES, 3); a.mov_l_imm(SWNAMES, 2)
+    a.label('lbd_s'); a.mov_w_ld(3, 0); a.cmp_b_rr('r4l', 'r0l'); a.beq('lbd_f')
+    a.adds1(3); a.adds1(3); a.add_l_imm(9, 2); a.dec_b('r4h'); a.bne('lbd_s')
+    row_put('?'); a.bra('lbd_c')
+    a.label('lbd_f'); a.bsr16('row_str')                        # the factory test's name for it
+    a.label('lbd_c'); a.pop_l(4); row_put('  ')
+    a.mov_w_from_abs(LKEYW, 0); a.bsr16('hex4w')
+    a.mov_w_from_abs(LKEYW, 0); a.btst_imm(6, 'r0h'); a.beq('lbd_e'); row_put(' UP')
+    a.label('lbd_e'); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+    D.text(4, 13, KROW, 'font_tiny')
+    D.text(4, 23, 's_lbhelp', 'font_tiny')
+    a.rts()
+    a.label('lab_bt_k'); a.mov_w_to_abs(5, LKEYW); a.jmp('redraw')
+    a.label('hex4w')                                            # r0 -> 4 hex digits at er1
+    a.push_l(3); a.mov_w_rr(0, 3)
+    for sh in (12, 8, 4, 0):
+        nx = uniq('hx')
+        a.mov_w_rr(3, 0)
+        for _ in range(sh): a.shlr_w(0)
+        a.and_b_imm(15, 'r0l'); a.add_b_imm(0x30, 'r0l'); a.cmp_b_imm(0x3A, 'r0l'); a.bcs(nx); a.add_b_imm(7, 'r0l')
+        a.label(nx); a.mov_b_st('r0l', 1); a.adds1(1)
+    a.pop_l(3); a.rts()
+    a.label('lab_idle')                                         # ANALOG INPUTS shown: redraw every 40 ms
+    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LAB, 'r0l'); a.bne('lbi_x')
+    a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_x')
+    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_x')
+    a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('lbi_x')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LABT, 1); a.sub_l(1, 0); a.cmp_l_imm(40, 0); a.bcs('lbi_x')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LABT)
+    a.bra16('draw')
+    a.label('lbi_x'); a.rts()
+    a.label('row_str')                                          # copy the string at er2 to er1 (er1 ends at its end)
+    a.mov_b_ldinc(2, 'r0l'); a.beq('rs_e'); a.mov_b_st('r0l', 1); a.adds1(1); a.bra('row_str')
+    a.label('rs_e'); a.rts()
+    for g_, i_ in MX_ROUTINES:                                  # ROUTING: the table byte -> Roland's mixer API
+        a.label('mx_%d_%d' % (g_, i_))
+        a.mov_b_from_abs(mx(g_, i_), 'r1l'); a.mov_b_imm(0, 'r1h'); a.mov_w_imm(i_, 8); a.mov_w_imm(g_, 0)
+        a.jsr(MIXER_PARAM); a.rts()
+    a.label('rt_loc')                                           # FX LOCATION changed by hand: preset -> CUSTOM
+    a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', RPRE)
+    a.label('rt_loc2')                                          # the mixer's FX LOCATION on, apply it the stock way
+    a.bset_abs(7, MIXER_LOC_FLAGS); a.jsr(FX_LOC_APPLY); a.rts()
+    a.label('rt_preset')
+    a.mov_b_from_abs(RPRE, 'r0l')
+    for k_, (nm_, loc_) in enumerate(RT_PRESETS):
+        if loc_ is None: continue
+        nx_ = uniq('rtp')
+        a.cmp_b_imm(k_, 'r0l'); a.bne16(nx_)
+        if nm_ == 'LOOP FX':                                    # send/return: tracks send, the input stays dry
+            for g_, v_ in ((0, 100), (1, 100), (2, 100), (3, 100), (4, 0)):
+                a.mov_w_imm(v_, 1); a.mov_w_imm(17, 8); a.mov_w_imm(g_, 0); a.jsr(MIXER_PARAM)
+            a.mov_w_imm(100, 1); a.mov_w_imm(6, 8); a.mov_w_imm(6, 0); a.jsr(MIXER_PARAM)
+        a.mov_b_imm(loc_, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_IDX); a.bra16('rt_loc2')
+        a.label(nx_)
+    a.rts()
     a.label('fmt_u')                                            # r0 -> decimal, no leading zeros
     a.push_l(3)
     a.mov_l_imm(NUMBUF + 6, 3); a.extu_l(0)
@@ -2901,9 +3100,18 @@ def build():
     a.label('att_ms'); a.raw(struct.pack('>16H', *ATT_MS))
     for lb, tb in (('la_ms', LA_MS), ('laf_ms', LAF_MS), ('dec_ms', DEC_MS)): a.label(lb); a.raw(struct.pack('>16H', *tb))
     a.label('dec_per'); a.raw(DEC_PER); a.label('fdec_per'); a.raw(FDEC_PER); a.align2()
-    for ti, (tn, items) in enumerate(DDS_TABS):                # scroll thumb y per first row shown
-        nit = len(items)
-        if nit > 3: a.label('dd_sb%d' % ti); a.raw(bytes(9 + round((22 - sb_thumb(nit)) * top / (nit - 3)) for top in range(nit - 2)))
+    def sb_table(lbl, n): a.label(lbl); a.raw(bytes(9 + round((22 - sb_thumb(n)) * top / (n - 3)) for top in range(n - 2)))
+    for P_ in MAC_PAGES:                                       # scroll thumb y per first row shown
+        if len(P_['tabs']) > 3: sb_table('%s_sbm' % P_['pid'], len(P_['tabs']))
+        for ti, (_, items) in enumerate(P_['tabs']):
+            if not isinstance(items, str) and len(items) > 3: sb_table('%s_sb%d' % (P_['pid'], ti), len(items))
+    a.align2()
+    a.label('rt_locn')
+    for i in range(len(RT_LOC_NAMES)): a.dc_l('s_rtl%d' % i)
+    a.label('lab_chn')
+    for i in range(len(LAB_CH_NAMES)): a.dc_l('s_lbc%d' % i)
+    a.label('rt_pren')
+    for i in range(len(RT_PRESETS)): a.dc_l('s_rtp%d' % i)
     a.align2()
     a.label('f_hi'); a.raw(bytes(F_HI)); a.label('f_lo'); a.raw(bytes(F_LO))
     a.label('q_hi'); a.raw(bytes(Q_HI)); a.label('q_lo'); a.raw(bytes(Q_LO))
@@ -2926,7 +3134,7 @@ def build():
                    ('s_armed', 'HIT A PAD'), ('s_cancel', 'EXIT=CANCEL'),
                    ('s_looper', 'LOOPER'), ('s_keys', 'KEYBOARD'),
                    ('s_soon', 'COMING SOON'), ('s_exithelp', 'EXIT=HOME'),
-                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), ('s_dds', 'DDS-DSP'), ('s_dtab0', 'OSC'), ('s_dtab1', 'LA'), ('s_dtab2', 'ENV'), *DDS_STRS, ('s_ksamp', 'SAMPLING...'),
+                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), *MAC_STRS, ('s_lbhelp', 'PRESS ANY BUTTON  EXIT=HOME'), ('s_ksamp', 'SAMPLING...'),
                    ('s_kwait', 'EXIT=CANCEL'), ('s_kplay', 'PLAY SRC'), ('s_kphelp', 'SHIFT+EXIT=PICK  UP/DN'), ('s_krel', 'REL')):
         a.label(lbl); a.string(s)
     return a.assemble(), a.labels
@@ -2990,7 +3198,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0)):
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         a.mov_b_imm(0, 'r0l')
         for v_ in range(NV): a.mov_b_to_abs('r0l', VLAS + v_)

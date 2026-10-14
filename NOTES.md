@@ -249,6 +249,41 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.91 (1191, 2026-10-15, emulator-tested, NOT on hw): ROUTING + LAB tiles, Mac page engine
+- **Mac page engine** (build_v10 `MAC_PAGES`): one table-driven generator for every Classic Mac page (window, 3-row
+  list, submode menu with full names and `>`, scroll bars for lists and menus > 3). DDS-DSP moved onto it. Item =
+  (label, RAM byte, min, max, apply routine, display: number / table / OFF / name list / pan); a tab can also be a
+  routine name (own body: `<name>_d` draws inside the window, `<name>_k` gets the keys, EXIT home, ENTER = menu).
+  Wide values (range > 31) step with the dial's speed (1..8 per pass, KSTEP), buttons step 1.
+- **ROUTING tile** (Roland's own mixer, so the stock screens agree with it; NOTES "DSP0 mixer map"):
+  QUICK SETUP (PRESET: DRY / INPUT FX / LOOP FX / MASTER FX / REC FX / FX PATCH, FX AT = the 16 FX LOCATIONs,
+  FX RETURN, MASTER), LEVELS (tracks A-D, input, REC BUS), PAN, FX SENDS (+ send master), AUX SENDS (+ AUX master).
+  FX AT writes the stock setting (0x426DD1, bit 7 of 0x426DD0) and calls Roland's apply (0x1361CE), because the OS
+  re-applies the location on pad playback (0x14E8B0 -> 0x1361FE): a bare MIXER_PARAM(7, 0, code) would not stick.
+  LOOP FX = SEND/RETURN with tracks A-D sending 100, the input 0, send master 100.
+- **LAB tile** (hidden hardware): ANALOG INPUTS = the 14 raw ADC bytes (0x426CBE) as live bars (40 ms), the selected
+  channel inverted with its name and value (6-8 PARA-A..C, 9/10 BEAM L/R, 11 FOOT SW?; the rest to be found on hw);
+  BUTTONS = the last key event, its name from the factory SW CHECK table, the code, UP on release.
+- **KEYS: sample + oscillators**: with SAMPLE and any oscillator on (LA off, loop off) a held note no longer stops at
+  the sample end: the sample is cut there (the LA cut, VLAT = VSEND) and the oscillators hold the note. (Found by the
+  suite: ENV DECAY/SUSTAIN with SAW + SAMPLE ended at the 439 ms take.)
+- Tests: `tools/test_route.py` (ROUTING presets / FX AT / mixer calls / dial step, LAB bars / channel / key names).
+
+### Hidden stuff (log of finds, 2026-10-15)
+- **3 FX insert slots in DSP0, Roland uses 1** (mixer group 7 index 0/1/2): slots 1/2 send on GRAM D0-D6 and return on
+  64-6F; no Roland DSP1 program reads them. Our own DSP1 programs can run 3 effects at 3 mix points.
+- **AUX bus** (send 1 per channel + AUX master) feeds INS AUX-OUT / the AUX jacks; **REC bus** (per channel MIX or REC).
+- **Direct outs**: DSP0 writes every track's signal to GRAM g[E0]-g[EE] (+ g[88]/g[8A]); a second tap selector
+  (mixer group 6 index 11) picks any of the 15 tap points for g[EA]/g[EC].
+- **14 peak meters** computed in DSP0 (0x27E-0x2ED) into GRAM g[84]-g[C6].
+- **Factory test mode** (power-on combo ST D + EFX D -> 0x11BDE6, see the combo table): LCD / ENCODER / SW / LCD
+  CONTRAST / FADER / POT / **BEAM CHECK (L + R sensors)** / FOOT SW / MIDI / Zip / IDE / **SCSI + DIGITAL (coax / optical)
+  CHECK for an "SP808-OP1" option board** / ANALOG CHECK (Fs 44.1 / 32 kHz, LINE / PHONE, MASTER / AUX / M+A outputs,
+  AUX IN) / LED CHECK / DEVICE CHECK (CPU, DRAM).
+- D-Beam = ADC 9 / 10 read through curve tables (0x127A66 -> 0x426D12 pointers); 0x12780E = raw ADC n + 9.
+- Mixer levels: 100 = the OS's nominal level (it writes 100 for master / input / tracks), 127 = about +6 dB over it
+  (coefficient 63>>3 vs ~4.0), 64 = about -10 dB.
+
 ### v1.9 (1190, 2026-10-14): DDS-DSP tabs OSC / LA / ENV (host only, no DSP words)
 - User picked LA + ENV and LFO first, DDS before Looper v2 (and will test the old looper meanwhile).
 - **Tabs:** ENTER cycles OSC / LA / ENV (title row, current tab inverted), UP/DOWN pick, dial / LEFT / RIGHT change.
@@ -658,6 +693,57 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - The changed bytes are only: the version (3 places), the JSW string, 3 bytes of the screen 5 entry, and the new code.
 - Screen handler protocol: `handler(r0.w = event)`. 0 = enter, 5/6 = refresh/tick, 9 = key (code in 0x4278BA).
 - Home screen id lives at 0x403256 (initial 5); EXIT goes home via 0x13FD12.
+
+## DSP0 mixer map (2026-10-15, emulator: tools/mixmap.py -> work/dsp/mixmap.txt)
+`tools/mixmap.py` runs Roland's own mixer API 0x11F2AE(r0 = group, e0 = index, r1 = value) in the H8S emulator
+(boot ROM math library + dump/BOOTRAM.BIN loaded, DSP shadows prefilled with the ROM programs) and diffs the DSP0
+shadow (0x410362, 4 bytes per word: bytes 0-2 = ROM order, coef first) for values 0..127. Values land in RAM tables
+0x422018 + 0x2A * group (channels), 0x4220EA (group 5), 0x4220F0 (group 6), 0x422108 (group 7).
+
+**Channels** (groups 0-3 = Tr.A-D = the 4 stream channels, group 4 = MIC/LINE input), per channel:
+| idx | what (DSP0 words for Tr.A) |
+|---|---|
+| 0 | input on (word 0/2 coef 0 vs 32) |
+| 1 | input source: GRAM g[09]/g[0B] vs IRAM i[0F]/i[12] (rewrites the whole word) |
+| 2 | stereo / mono (0 = L+R summed: cross terms 0x21/0x22) |
+| 3 | stream block word 0x6E/0x8A on (0) / nop (1+) |
+| 8 | stream block 0x58-0x60 / 0x74-0x7C coefficient set (interpolator? 0 = all zero) |
+| 4-7, 9, 10 | no DSP write on their own (stored only; probably EQ, applied with other params) |
+| 11 | **LEVEL**: word 0x171 (Tr.A), 0x183, 0x195, 0x1A7, 0x1B9 (input): exponential, 0 = off, 100 = the OS's nominal, 127 = about +6 dB, 64 = about -10 dB |
+| 12 | **PAN**: L word / R word, 0 = L, 64 = both full, 127 = R |
+| 13/14/15 | **send 1 (AUX)**: pre/post tap select (i[2E] vs i[2F]), level, pan (words 0x1D5/0x1D6 ...) |
+| 16/17/18 | **send 2 (FX send)**: same, words 0x1E8/0x1E9 ... |
+| 19 | output: 0 = MIX bus (0x1FB..), 1+ = REC bus (0x221..) |
+| 20 | 1 = direct out on GRAM g[88]/g[8A]... (words 0x26C/0x26E) |
+
+**Buses** (DSP0 0x1D5-0x237): send-1 sum -> i[13]/i[16] (= AUX OUT), send-2 sum -> i[19]/i[1B] (= FX SEND), MIX sum
+(+ FX return channel group 5, + i[1E]) -> i[07]/i[0A] -> master level 0x20D (group 6 idx 0/1) -> i[08]/i[0B], REC bus
+-> i[0D]/i[10] (level 0x233 = group 6 idx 2/3). Group 5 = FX RETURN channel (level 0x1CD, pan, 2 = MIX / REC).
+Group 6: 0/1 master, 2/3 REC bus, 4/5 send-1 master, 6/7 send-2 master, 8/9 i[1E] channel, 10 i[1E] to MIX / REC,
+11 = a second tap selector (words 0x278/0x27A -> g[EA]/g[EC], same codes as below).
+DSP0 0x27E-0x2ED: 14 peak meters (abs + decay) -> GRAM g[84]...g[C6].
+
+**FX LOCATION codes** (string table 0x164D38, 18-byte entries: name, code, channel): mixer group 7 idx 0 = code.
+| code | tap | name |
+|---|---|---|
+| 0 | - | OFF |
+| 1 | i[19] | SEND/RETURN (send-2 bus) |
+| 2/3, 4/5, 6/7, 8/9 | i[2C]/i[2D], i[3E]/i[3F], i[50]/i[51], i[62]/i[63] | Tr.A..D PRE-EQ / POST-EQ |
+| 0x0A/0x0B | i[70]/i[71] | MIC/LINE PRE-EQ / POST |
+| 0x0C | i[07] | INS MASTER (what KEYS uses) |
+| 0x0D | i[0D] | INS RECORD |
+| 0x0E | i[13] | INS AUX-OUT |
+An insert = the tap goes out on GRAM, the return is stored back into the same IRAM cell (words 0x252/0x254).
+
+**THREE insert slots, Roland uses one** (group 7 idx 0/1/2, each takes the codes above):
+| slot | DSP0 -> DSP1 (DSP1 reads +1) | DSP1 -> DSP0 (DSP1 writes -1) | used by |
+|---|---|---|---|
+| 0 | g[70]/g[74] (DSP1 reads g[71]/g[75]) | g[73]/g[77] (DSP1 writes g[72]/g[76]) | every Roland FX + KEYS |
+| 1 | g[D0]/g[D2] (read g[D1]/g[D3]) | g[65]/g[6D] (write g[64]/g[6C]) | **nothing** |
+| 2 | g[D4]/g[D6] (read g[D5]/g[D7]) | g[67]/g[6F] (write g[66]/g[6E]) | **nothing** |
+No Roland DSP1 program touches slots 1/2 (they only use g[71]/g[75] in, g[72]/g[76]/g[78] out). A DSP1 program of our
+own can run **three effects at three different mix points at once** (e.g. input FX + loop FX + master FX), each slot
+placed with MIXER_PARAM(7, slot, code). Avoid g[68] (DSP0 reads g[69] as an input at word 0x16).
 
 ## Hardware buses
 | addr | what |
