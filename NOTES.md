@@ -249,6 +249,27 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.71 (1171, 2026-10-14): background "oscillation" on hw, pass-through per channel, THRU toggle
+- **Hw report (v1.7):** keys work, but a constant background "like the sample" on the KEYS page: forever, same
+  level, filter (knob A) makes no difference, gone on EXIT.
+- Ruled out in the models: stuck voices (stress test: 600 random pad events with chords, loop on/off, no idle voice
+  ever has a level), SVF ringing (decays to ~-110 dB even at full resonance), the 0x34 0xA5 mc-from-B form (Roland's
+  fx02/fx10/fx15 use it the same way, with B computed 4 words before).
+- **Found:** the v1.5+ mixer added inL AND inR into one sum and stored it to both outputs (i[13] = i[19]): each
+  side got the other side's input at unity, pads/tracks became mono +6 dB. If the master feeds back into the FX
+  input at -6 dB, that is a loop of gain exactly 1: everything played circulates forever at the same level.
+- **Fix:** the mixer moved to the free block before the voices (0x60-0x85): VS = sum of last sample's OUT (read at
+  out + 1, one sample latency), SVF on VS, F = lp * wet + VS * dry (plain semantics again: off 0/64, on 64/0),
+  i[13] = F + inL * thru, i[19] = F + inR * thru (B side via MIXF 0x98). Program end now 0x260: 0x92 words free.
+- **S-EDIT THRU on/off** (KTHRU, row next to RELEASE; cursor order RELEASE THRU / REVERSE LOOP): PLAY passes the
+  pads/tracks through or not. Diagnostic: if the background stays with THRU off, it is not the pass-through.
+- **Zombie voices (loop mode):** a key released while its voice was still at level 0 (attack start, fade-in start)
+  left the voice in state 3 at level 0 forever; with LOOP on it kept handing over at level 0 and stole voices from
+  held notes. The release ramp now also idles voices already at 0, and RELEASE 0 ms (period 0) drops released
+  voices at once: before, the ramp skipped period 0 entirely, so with REL 0 every released voice stayed in state 3.
+- Tests: the sim doesn't run the boot RAM init; test_v10 sets KTHRU = 1 like the unit (KREL stays 0 in the sim).
+- Not done: idle-first voice allocation (round robin still steals the oldest voice, also for loop continuations).
+
 ### Hardware results 2026-10-14 (v1.1 / v1.2) and v1.3
 - **KEYS works on the unit:** pitched across the pads, fast chords "sound great". Our own DSP1 program, on hw.
 - **mc3 does not exist as a general register on the FX core (DSP1).** Odd voices used mc3 for their level

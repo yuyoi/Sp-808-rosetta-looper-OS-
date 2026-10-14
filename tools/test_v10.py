@@ -122,6 +122,7 @@ def freq(ys):
 def main(image_path, out):
     sim = KeysSim(open(image_path, 'rb').read(), bm.build()[1])
     e, shots = sim.e, []
+    e.wb(bm.KTHRU, 1)                                        # as the boot RAM init (not run here) sets it
     e.wb(bm.PAGE, bm.P_HOME); sim.call('menu', 0); sim.run(5)
     sim.key(bm.K_SYSTEM); sim.run(30)                        # SYSTEM = KEYS page: program load + routing
     print('enter    ', sim.kstate(), 'loaded', e.rb(bm.KLOADED), 'log', sim.dsp_log[0], '... %d writes' % len(sim.dsp_log),
@@ -210,9 +211,9 @@ def main(image_path, out):
     # ---- v1.6: knobs (filter, attack), EDIT page, reverse, Roland's DSP writes gated ----
     W = lambda n: (bm.dsp_addr(n) & 0xFFC) >> 2
     cf = lambda n: sim.prog[W(n)] & 0xFF
-    print('knobs at rest: wet %d dry %d (filter off: 0 0), KATT %d, gate %d' % (cf('flt_wet'), cf('flt_dry'), e.rb(bm.KATT), e.rb(bm.KGATE)))
+    print('knobs at rest: wet %d dry %d (filter off: 0 64), KATT %d, gate %d' % (cf('flt_wet'), cf('flt_dry'), e.rb(bm.KATT), e.rb(bm.KGATE)))
     sim.knobs[6] = 80; sim.knobs[7] = 100; sim.run(30)
-    print('knob A 80, B 100: wet %d dry %d f %d/%d q %d/%d (cutoff %d Hz; on: 64 192)' % (cf('flt_wet'), cf('flt_dry'), cf('flt_f1'), cf('flt_f1l'),
+    print('knob A 80, B 100: wet %d dry %d f %d/%d q %d/%d (cutoff %d Hz; on: 64 0)' % (cf('flt_wet'), cf('flt_dry'), cf('flt_f1'), cf('flt_f1l'),
           cf('flt_q'), cf('flt_ql'), bm.CUT_HZ[80]))
     sim.knobs[6] = 127; sim.run(30); print('knob A 127: wet %d dry %d' % (cf('flt_wet'), cf('flt_dry')))
     sim.knobs[8] = 8 * 9; sim.run(30)                         # attack index 9 = 200 ms
@@ -235,6 +236,9 @@ def main(image_path, out):
     sim.key(bm.K_ENTER); sim.run(20)
     print('EDIT tile -> page', e.rb(bm.PAGE), 'active', e.rb(bm.KACTIVE), 'state', sim.kstate())
     shots.append(('EDIT page', sim.shot()))
+    sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(20)                     # THRU off (pads/tracks muted in KEYS)
+    print('THRU toggled: KTHRU %d thru coef %d (expect 0 0)' % (e.rb(bm.KTHRU), sim.prog[W('thru_l')] & 0xFF))
+    sim.key(bm.K_ENTER); sim.run(20); print('THRU toggled: KTHRU %d thru coef %d (expect 1 64)' % (e.rb(bm.KTHRU), sim.prog[W('thru_l')] & 0xFF))
     sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(20)
     print('REVERSE on: KREV %d ref_f %d ref_r %d v0_dir %d v7_dir %d' % (e.rb(bm.KREV), cf('ref_f'), cf('ref_r'),
           sim.prog[W('v0_dir')] & 0xFF, sim.prog[W('v7_dir')] & 0xFF))

@@ -1,7 +1,7 @@
 """KEYS sampler for DSP1 (the SP-808's effects core): N pitched voices playing one sample held in the FX delay RAM.
 
 Layout of the DSP1 program: Roland's 58-word base stays (I/O, wet ramp), our algorithm sits at 0x3C.. (globals)
-and 0x100.. (voices, mixer); 0xF1-0xFF stay nop because the OS's end-of-program JMP 0x2F2 -> 0xF1 may re-run them.
+0x50.. (AGE_E/REF/SOFF, voice sum, filter, output mix) and 0x100.. (voices); 0xF1-0xFF stay nop because the OS's end-of-program JMP 0x2F2 -> 0xF1 may re-run them.
 
 Model (phases are 16.8 fixed point in 24-bit IRAM words, 44.1 kHz):
   AGE   += 256 per sample            (host resets it when the recording's sound starts: coef 'age_g' = 0 for one pass)
@@ -11,7 +11,9 @@ Model (phases are 16.8 fixed point in 24-bit IRAM words, 44.1 kHz):
   voice v: PHI_v += DELTA_v (= 256 * pitch ratio, from 3 coefficient fields), reset by 'g' = 0 for one pass;
            X = AGE - PHI_v -> read ERAM at pos + X (two reads, +0/+1) interpolated with the fraction;
            LVL_v one-pole smoothed from coefficient 't' (target = t * 2^15); OUT_v = sample * LVL_v.
-  mixer:  i[0x13] = i[0x19] = sum OUT_v + input * thru (pass-through while picking / sampling).
+  mixer:  (start of the sample, last sample's OUT_v) VS = sum OUT_v -> filter -> F = lp * wet + VS * dry;
+          i[0x13] = F + inL * thru, i[0x19] = F + inR * thru (per channel: Roland's base subtracts each side's
+          own input from the return, so a summed L+R pass-through leaked the other side at unity).
 build() returns the 768-word program (DSP view) and {name: ('coef'|'eram', word)}.  Coef fields are written with
 the OS routine 0x108936 (r0 = 0x1000 | word << 2, e0 = coef << 8 | shift selector); ERAM groups with 0x108B64.
 """
@@ -25,6 +27,7 @@ G0, V0, VSTRIDE = 0x3C, 0x100, 44
 AGE, REC, PK, T1 = 0x20, 0x22, 0x24, 0x26
 AGE_E, REF = 0x28, 0x2A                                 # age since the take's END (reverse); the voices' read reference
 VS, LP, BP, HP = 0x90, 0x92, 0x94, 0x96                 # voice sum (filter input), state-variable filter lp / bp / hp
+MIXF = 0x98                                             # the voices' output (filtered or dry), for the R channel
 SOFF = 0x2C                                             # loop start offset (16.8, raw): a voice with sel on starts there
 G1 = 0x50                                               # second global block: AGE_E, REF, the filter (before the voices)
 def vslot(v, k): return 0x30 + 12 * v + 2 * k          # per voice: PHI, LVL, NX, SMP, OUT, S1/S2 (head temps)
@@ -80,13 +83,18 @@ def build(nvoices=NVOICES):
     put(g + 11, E(0x00, 3, SH3, 0), 'soff_b')                  # A += 0x10000 * b >> 3 = b * 0x2000
     put(g + 12, E(0x00, 2, SH3, 0), 'soff_c')                  # A += 0x400 * c >> 3 = c * 0x80
     put(g + 15, E(0x40, SOFF, SH7, 0))                         # i[SOFF] = raw(A(+12))
-    # ---- state-variable low-pass on the previous sample's voice sum (Chamberlin), 15-bit coefficients ----
+    # ---- voice sum: the voices' outputs of the last sample (OUT is read at out + 1): one sample of latency ----
+    sm = g + 16
+    for k in range(nvoices):
+        put(sm + k, E(0x04 if k == 0 else 0x00, vslot(k, OUT) + 1, SH6, 64))
+    put(sm + nvoices + 2, E(0x58, VS, SH7, 0))                 # i[VS] = sat(A(+n-1)) = the voices
+    # ---- state-variable low-pass on the voice sum (Chamberlin), 15-bit coefficients ----
     #   lp' = lp + f*bp ; hp = x - lp' - q*bp ; bp' = bp + f*hp      (f: SH7 + lo7, q: SH6 + lo7, q_hi negative)
-    f = g + 16
+    f = sm + nvoices + 3
     put(f + 0, E(0x04, LP + 1, SH6, 64))                       # A = lp
     put(f + 1, E(0x00, BP + 1, SH7, 0), 'flt_f1')              # A += bp * f_hi
     put(f + 2, E(0x34, 0xC6, SH7, 0), 'flt_f1l')               # A += bp * f_lo / 128           -> lp'
-    put(f + 3, E(0x14, VS + 1, SH6, 64))                       # B = x
+    put(f + 3, E(0x14, VS, SH6, 64))                           # B = x (VS, stored 4 words ago)
     put(f + 4, E(0x10, BP + 1, SH6, 0), 'flt_q')               # B += bp * q_hi   (q_hi <= 0)
     put(f + 5, E(0x34, 0xE6, SH6, 0), 'flt_ql')                # B += bp * q_lo / 128
     put(f + 6, E(0x58, LP, SH7, 0))                            # i[LP] = sat(A(+3)) = lp'
@@ -96,7 +104,17 @@ def build(nvoices=NVOICES):
     put(f + 12, E(0x00, HP, SH7, 0), 'flt_f2')                 # A += hp * f_hi
     put(f + 13, E(0x34, 0xC6, SH7, 0), 'flt_f2l')              # A += hp * f_lo / 128           -> bp'
     put(f + 16, E(0x58, BP, SH7, 0))                           # i[BP] = sat(A(+13))
-    assert f + 16 < 0xF1
+    # ---- output, per channel: F = lp' * wet + voices * dry; L = F + inL * thru, R = F + inR * thru ----
+    o = f + 17
+    put(o + 0, E(0x04, LP, SH6, 0), 'flt_wet')                 # A = lp' * wet       (filter on: 64)
+    put(o + 1, E(0x00, VS, SH6, 64), 'flt_dry')                # A += voices * dry   (filter off: 64)
+    put(o + 2, E(0x00, 0x12, SH6, 0), 'thru_l')                # A += inL * thru
+    put(o + 3, E(0x14, 0x18, SH6, 0), 'thru_r')                # B = inR * thru
+    put(o + 4, E(0x58, MIXF, SH7, 0))                          # i[MIXF] = sat(A(+1)) = F
+    put(o + 5, E(0x58, 0x13, SH7, 0))                          # i[13] = sat(A(+2)) = F + inL
+    put(o + 6, E(0x10, MIXF, SH6, 64))                         # B += F
+    put(o + 9, E(0x1C, 0x19, SH7, 0))                          # i[19] = sat(B(+6)) = F + inR; B cleared
+    assert o + 9 < 0xF1
     # ---- voices ----
     outs = []
     for v in range(nvoices):
@@ -133,19 +151,7 @@ def build(nvoices=NVOICES):
         put(b + 40, dmac(acc_b=True))
         put(b + 43, E(0x1C, out, SH7, 0))                       # i[OUT] = sat(B(+40)); B cleared
         outs.append(out)
-    # ---- mixer: voices + pass-through -> i[13] (L) and i[19] (R) ----
-    m = V0 + VSTRIDE * nvoices
-    for k, out in enumerate(outs):
-        put(m + k, E(0x04 if k == 0 else 0x00, out, SH6, 64))
-    n = len(outs)
-    put(m + n, E(0x00, 0x12, SH6, 0), 'thru_l')                 # A += inL * thru
-    put(m + n + 1, E(0x00, 0x18, SH6, 0), 'thru_r')             # A += inR * thru
-    put(m + n + 2, E(0x58, VS, SH7, 0))                         # i[VS] = sat(A(+n-1)) = the voices alone
-    put(m + n + 3, E(0x00, LP, SH6, 0), 'flt_wet')              # A += lp' * wet          (filter on: 64)
-    put(m + n + 4, E(0x00, VS, SH6, 0), 'flt_dry')              # A += voices * (dry - 1) (filter on: -64)
-    put(m + n + 7, E(0x58, 0x13, SH7, 0))                       # i[13] = sat(A(+n+4))
-    put(m + n + 8, E(0x58, 0x19, SH7, 0))                       # i[19] = same
-    end = m + n + 9
+    end = V0 + VSTRIDE * nvoices
     assert end <= 0x2F2 and all(w == 0 for w in prog[0xF1:0x100]), 'program layout'
     return prog, params
 
