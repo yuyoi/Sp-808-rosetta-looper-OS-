@@ -262,7 +262,8 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   re-applies the location on pad playback (0x14E8B0 -> 0x1361FE): a bare MIXER_PARAM(7, 0, code) would not stick.
   LOOP FX = SEND/RETURN with tracks A-D sending 100, the input 0, send master 100.
 - **LAB tile** (hidden hardware): ANALOG INPUTS = the 14 raw ADC bytes (0x426CBE) as live bars (40 ms), the selected
-  channel inverted with its name and value (6-8 PARA-A..C, 9/10 BEAM L/R, 11 FOOT SW?; the rest to be found on hw);
+  channel inverted with its name and value (names from CONTROLS.md: 0-3 faders A-D, 4/5 fader 5/6?, 6-8 PARA-A..C,
+  9/10 BEAM L/R, 11 FOOT SW; 4/5/12/13 to confirm on hw);
   BUTTONS = the last key event, its name from the factory SW CHECK table, the code, UP on release.
   LED SHOW = every LED one at a time (</> step, UP = chase every 90 ms, DOWN = stop) with its factory name and code;
   each LED's own state is put back when it is left (and on leaving the tab / page).
@@ -293,7 +294,7 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - **Direct outs**: DSP0 writes every track's signal to GRAM g[E0]-g[EE] (+ g[88]/g[8A]); a second tap selector
   (mixer group 6 index 11) picks any of the 15 tap points for g[EA]/g[EC].
 - **14 peak meters** computed in DSP0 (0x27E-0x2ED) into GRAM g[84]-g[C6].
-- **Factory test mode** (power-on combo ST D + EFX D -> 0x11BDE6, see the combo table): LCD / ENCODER / SW / LCD
+- **Factory test mode** (power-on combo ST D + EFX D -> 0x11BDE6, see the combo table; CONTROLS.md had most of it): LCD / ENCODER / SW / LCD
   CONTRAST / FADER / POT / **BEAM CHECK (L + R sensors)** / FOOT SW / MIDI / Zip / IDE / **SCSI + DIGITAL (coax / optical)
   CHECK for an "SP808-OP1" option board** / ANALOG CHECK (Fs 44.1 / 32 kHz, LINE / PHONE, MASTER / AUX / M+A outputs,
   AUX IN) / LED CHECK / DEVICE CHECK (CPU, DRAM).

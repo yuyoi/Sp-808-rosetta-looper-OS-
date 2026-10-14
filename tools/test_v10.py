@@ -47,6 +47,13 @@ class KeysSim(test_v09.Sim):
             e.wb(bm.CUR_BANK, nb); self.log.append((round(self.t, 1), 'bank', nb))
         s[bm.BANK_SWITCH] = bank_switch
         e.wb(bm.FX_ROUTE_CODE, 0x01)                         # stock: send/return
+        self.leds = []                                       # Roland's LED on / off, on the state bits (v1.91)
+        def led(on):
+            def f(e):
+                code = e.g16(0); m = e.rw(bm.LED_MASKS + 2 * (code & 15)); a_ = bm.LED_ROWS + 2 * ((code >> 4) & 15)
+                e.ww(a_, (e.rw(a_) | m) if on else (e.rw(a_) & ~m)); self.leds.append((round(self.t, 1), on, code))
+            return f
+        s[bm.LED_ON], s[bm.LED_OFF] = led(1), led(0)
         for p in range(16): self.pads[p] = bytearray(test_v09.EMPTY)
         import struct
         start = 100000; n_units = int(0.6 * FS / 16)         # pad 3 holds a 0.6 s sample

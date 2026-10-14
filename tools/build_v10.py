@@ -421,7 +421,8 @@ MX_ROUTINES = sorted({(int(it[4].split('_')[1]), int(it[4].split('_')[2])) for _
 LTAB, LCURX, LCH = RAM_BASE + 0x424, RAM_BASE + 0x425, RAM_BASE + 0x426
 LKEYW, LABT = RAM_BASE + 0x428, RAM_BASE + 0x42C
 ADC_TAB, ADC_N, SWNAMES, SWCODES, SW_N = 0x426CBE, 14, 0x15F9E8, 0x16414C, 67
-LAB_CH_NAMES = ['', '', '', '', '', '', 'PARA-A', 'PARA-B', 'PARA-C', 'BEAM L', 'BEAM R', 'FOOT SW?', '', '']
+LAB_CH_NAMES = ['FADER A', 'FADER B', 'FADER C', 'FADER D', 'FADER 5?', 'FADER 6?', 'PARA-A', 'PARA-B', 'PARA-C',
+                'BEAM L', 'BEAM R', 'FOOT SW', '', '']                    # (CONTROLS.md; 4/5/12/13 to confirm on hw)
 LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt'), ('LED SHOW', 'lab_ld')]
 # LEDs: Roland's API 0x132866(code) on / 0x132880(code) off; state bits at 0x427390 + 2 * (code >> 4), mask from the
 # word table 0x16464E[code & 15]. The factory LED CHECK's list (0x15F91E) without its zero entries = every LED.
@@ -431,6 +432,7 @@ LED_CODES = [0xF4, 0x40, 0x41, 0x42, 0x43, 0x60, 0x62, 0x64, 0x66, 0x61, 0x63, 0
              0xD2, 0xC0, 0xC4, 0xC5, 0xC2, 0xC3, 0xC6, 0xC7, 0xC8, 0xC1, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x18, 0x19, 0x1A,
              0x1B, 0x21, 0x14, 0x15, 0x16, 0x17, 0x22, 0x10, 0x11, 0x12, 0x13]
 LEDIX, LEDON, LEDWAS, LEDAUTO, LEDT = RAM_BASE + 0x448, RAM_BASE + 0x449, RAM_BASE + 0x44A, RAM_BASE + 0x44B, RAM_BASE + 0x44C
+KPLED, KPSAVE, KPNEW = RAM_BASE + 0x450, RAM_BASE + 0x452, RAM_BASE + 0x454   # KEYS pad LEDs: shown, the stock's, wanted
 # MFX (v1.91, interface + hooks; the sound blocks come later): our DSP1 program (mfxdsp.py) serves DSP0's three FX
 # insert slots (mixer group 7 index 0/1/2). Slot 1 goes through the stock FX LOCATION (so the EFFECTS button and the
 # OS's own re-apply on pad playback agree with it), slots 2/3 are written straight (the OS never touches them).
@@ -1266,6 +1268,9 @@ def build():
     set_byte(KLOADED, 0); set_byte(KSTATE, KS_IDLE)                                  # then our program + sample are gone
     a.label('ke_ours')
     set_byte(KACTIVE, 1)
+    a.mov_w_from_abs(LED_ROWS + 2, 0); a.mov_w_to_abs(0, KPSAVE)                   # pad LEDs: the stock's state kept,
+    for p_ in range(16): a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_OFF)                 # then they show the held keys
+    a.mov_w_imm(0, 0); a.mov_w_to_abs(0, KPLED)
     a.mov_b_from_abs(KLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('ke_loaded')
     a.bsr16('keys_load')
     a.label('ke_loaded')
@@ -1326,6 +1331,12 @@ def build():
 
     a.label('keys_exit')                       # leaving the page: voices off, recording off, routing back
     a.bclr_abs(0, KGATE); set_byte(KACTIVE, 0); set_byte(KBSEL, 0)
+    for p_ in range(16):                                                             # the stock's pad LEDs back
+        on_, nx_ = uniq('kxo'), uniq('kxn')
+        a.mov_w_from_abs(KPSAVE, 0); a.mov_w_from_abs(LED_MASKS + 2 * p_, 1); a.and_w_rr(1, 0); a.bne(on_)
+        a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_OFF); a.bra(nx_)
+        a.label(on_); a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_ON)
+        a.label(nx_)
     voices_silent()
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.beq('kx_r'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.beq('kx_r')
     a.bsr16('keys_rec_stop'); set_byte(KSTATE, KS_IDLE)
@@ -1612,12 +1623,36 @@ def build():
     a.mov_b_from_abs(KSRC, 'r0l'); a.extu_w(0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
     a.label('ks_out'); a.rts()
 
+    a.label('keys_padleds')                    # v1.91: held keys on the pad LEDs (pad p = key id p + 17)
+    a.mov_w_imm(0, 2)
+    for v in range(NV):
+        nx = uniq('kpl')
+        a.mov_b_from_abs(VPAD + v, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq(nx)
+        a.add_b_imm(0x100 - (KEY_LO - KEYS_ROOT), 'r0l'); a.cmp_b_imm(16, 'r0l'); a.bcc(nx)
+        a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0); a.mov_l_imm('bit16', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 0); a.or_w_rr(0, 2)
+        a.label(nx)
+    a.mov_w_to_abs(2, KPNEW); a.mov_w_from_abs(KPLED, 0); a.cmp_w_rr(2, 0); a.beq16('kpl_x')
+    for p_ in range(16):
+        nx, off = uniq('kpp'), uniq('kpf')
+        a.mov_w_from_abs(KPNEW, 0); a.mov_w_from_abs(KPLED, 1); a.xor_w_rr(0, 1)
+        if p_ < 8: a.btst_imm(p_, 'r1l')
+        else: a.btst_imm(p_ - 8, 'r1h')
+        a.beq(nx)
+        if p_ < 8: a.btst_imm(p_, 'r0l')
+        else: a.btst_imm(p_ - 8, 'r0h')
+        a.beq(off)
+        a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_ON); a.bra(nx)
+        a.label(off); a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_OFF)
+        a.label(nx)
+    a.mov_w_from_abs(KPNEW, 0); a.mov_w_to_abs(0, KPLED)
+    a.label('kpl_x'); a.rts()
     a.label('keys_idle')                       # every main-loop pass while on screen 5
     a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('ki_nokn')
     a.bsr16('keys_knobs')
     a.label('ki_nokn')
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.bne16('ki_np')
     a.bsr16('ki_voices')                       # voices before any drawing: a draw costs milliseconds
+    a.bsr16('keys_padleds')
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_KEYS, 'r0l'); a.beq('ki_pg'); a.cmp_b_imm(P_KSET, 'r0l'); a.beq('ki_pg')
     a.cmp_b_imm(P_DDS, 'r0l'); a.bne16('ki_pout')
     a.label('ki_pg')
@@ -3285,6 +3320,7 @@ def build():
     for i in range(len(MF_TGTS)): a.dc_l('s_mfg%d' % i)
     a.label('mf_c2i'); a.raw(bytes(MF_C2I)); a.align2()
     a.label('led_codes'); a.raw(bytes(LED_CODES)); a.align2()
+    a.label('bit16'); a.raw(struct.pack('>16H', *[1 << i for i in range(16)]))
     a.label('lab_chn')
     for i in range(len(LAB_CH_NAMES)): a.dc_l('s_lbc%d' % i)
     a.label('rt_pren')

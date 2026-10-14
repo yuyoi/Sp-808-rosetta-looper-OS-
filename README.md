@@ -62,6 +62,8 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 | KEYS: 8 + 4 voices, MIDI keyboard, velocity, S-EDIT filter / attack / release / reverse / loop, PAD BANK (v1.72) | works on hardware |
 | DDS-DSP: saw / pulse + PW / triangle / detuned unison per voice, layered with the sample (v1.81) | works on hardware |
 | looper: pad layers, overdub, undo / clear on PAD SAMPLING (v0.9b) | on the card since v1.8, **hw test pending** |
+| DDS-DSP tabs LA / ENV, Classic Mac menus, looper stopgap keys (v1.9) | emulator-tested, not on hw yet |
+| ROUTING (Roland's mixer + FX location, presets), LAB (live ADC bars, buttons, LED show), MFX (3 FX insert slots, engine, controls), held keys on the pad LEDs (v1.91) | emulator-tested, not on hw yet |
 | H8S disassembler / xref / assembler / emulator, ESP2 DSP decoder and simulator | work, used for all of the above |
 
 Open points for whoever picks it up:
@@ -106,9 +108,11 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.81; v0.7b-e are LCD diagnostics) |
+| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.91; v0.7b-e are LCD diagnostics) |
 | `tools/esp.py`, `tools/dspdump.py`, `tools/fxcapture.py` | ESP2 DSP decoder / disassembler / cycle simulator; DSP programs out of the image; live FX programs captured by running the stock loader in the emulator |
 | `tools/keysdsp.py`, `tools/test_v10.py` | our DSP1 sampler program (+ model test) and the KEYS end-to-end test |
+| `tools/mixmap.py` | runs Roland's mixer API in the emulator and maps every parameter onto DSP0 words |
+| `tools/mfxdsp.py`, `tools/test_mfx.py`, `tools/test_route.py`, `tools/test_padled.py` | the MFX DSP1 program (3 insert slots) and the v1.91 tests (MFX, ROUTING / LAB, pad LEDs) |
 | `tools/gfxlib.py`, `tools/ui_gfx.py` | graphics engine (framebuffer, fonts, icons, LCD packing) and the mockup renderer |
 | `tools/h8emu.py`, `tools/test_ui.py`, `tools/test_v08.py`, `tools/test_v09.py` | small H8S emulator that runs our code on the PC; screen and looper-session tests |
 | `tools/bootanim.py` | boot animation player + hook; frames from `assets/roland_chan_frames.npz` |
@@ -160,6 +164,16 @@ Also fixed on the way: since v0.4 our RAM sat inside the stock 2000-record event
 On the card, not tested yet:
 - **v0.9b looper:** PAD SAMPLING tap = REC / PLAY / DUB, double tap = stop, hold = undo / clear; layers are pads.
 
+Built and emulator-tested, waiting for the card:
+- **v1.9:** DDS-DSP in a Classic Mac style (submode menu with full names), LA sampled attack, decay / sustain,
+  filter envelope; looper stopgap keys on the LOOP page.
+- **v1.91:** `tools/mixmap.py` mapped Roland's whole mixer onto DSP0 (NOTES "DSP0 mixer map"), which turned up
+  **three FX insert slots where Roland uses one**. New tiles: **ROUTING** (presets DRY / INPUT FX / LOOP FX /
+  MASTER FX / REC FX, the 16 FX locations, levels, pans, FX and AUX sends), **LAB** (live bars of all 14 analog
+  inputs, the last button with its factory name, a light show over all 65 LEDs), **MFX** (our DSP1 program on all
+  three slots, each placeable at any of 14 mix points; level blocks for now, knobs / D-Beam / footswitch mappable).
+  KEYS lights the pads of the held keys.
+
 ## TODO
 
 - [x] Record / result screens in the new graphics (live level meter, timer, take waveform) - v0.8.
@@ -173,6 +187,8 @@ On the card, not tested yet:
 - [x] DDS-DSP (v1.8-v1.81, works on hw): saw / pulse + PW / triangle / unison + detune / octave, sample layer.
 - [ ] DDS next: LA + ENV tabs (v1.9, built), LFO (v1.91), voice modes (MONO / UNI-8 / GLIDE / ARP), 2-op FM +
   wavetable from a sample, VARI PITCH screen rebuild.
+- [x] ROUTING / LAB / MFX tiles (v1.91, emulator): Roland's mixer, hidden hardware pages, 3 insert slots.
+- [ ] MFX sound: real blocks per slot (filter, delay, crush, ...) with ears on the unit; pads as FX switches / scenes.
 - [ ] Stretch: an animation page with Hex Girl dancing, an uwu face mode and adjustable glitches.
 - [ ] Looper v2: 4 loops synced to loop 1, faders A-D, ASSIGN menu (single-switch mode), per-loop FX
   (plan in `LOOPER_DESIGN.md`).
