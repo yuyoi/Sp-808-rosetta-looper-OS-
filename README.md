@@ -173,6 +173,8 @@ Built and emulator-tested, waiting for the card:
   inputs, the last button with its factory name, a light show over all 65 LEDs), **MFX** (our DSP1 program on all
   three slots, each placeable at any of 14 mix points; level blocks for now, knobs / D-Beam / footswitch mappable).
   KEYS lights the pads of the held keys.
+- **v1.92:** DDS-DSP LFO tab (vibrato on oscillators + sample, tremolo, filter; TRIANGLE / SQUARE / SAW / RANDOM,
+  0.2-15 Hz, fade-in delay).
 
 ## TODO
 
@@ -185,8 +187,8 @@ Built and emulator-tested, waiting for the card:
   release / reverse / loop / THRU, PAD BANK.
 - [ ] Keyboard next: resample the keys' output, stock FX back after KEYS, longer samples, MIDI channel setting.
 - [x] DDS-DSP (v1.8-v1.81, works on hw): saw / pulse + PW / triangle / unison + detune / octave, sample layer.
-- [ ] DDS next: LA + ENV tabs (v1.9, built), LFO (v1.91), voice modes (MONO / UNI-8 / GLIDE / ARP), 2-op FM +
-  wavetable from a sample, VARI PITCH screen rebuild.
+- [x] DDS: LA + ENV tabs (v1.9), LFO tab (v1.92: vibrato / tremolo / filter, 4 waves, delay), emulator-tested.
+- [ ] DDS next: voice modes (MONO / UNI-8 / GLIDE / ARP), 2-op FM + wavetable from a sample, VARI PITCH screen rebuild.
 - [x] ROUTING / LAB / MFX tiles (v1.91, emulator): Roland's mixer, hidden hardware pages, 3 insert slots.
 - [ ] MFX sound: real blocks per slot (filter, delay, crush, ...) with ears on the unit; pads as FX switches / scenes.
 - [ ] Stretch: an animation page with Hex Girl dancing, an uwu face mode and adjustable glitches.

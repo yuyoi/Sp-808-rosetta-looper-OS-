@@ -98,6 +98,9 @@ class Asm:
     def shll_l(self, n): self._b(0x10, 0x30 | n)
     def shll_l2(self, n): self._b(0x10, 0x70 | n)                                       # shll.l #2,ern
     def extu_w(self, n): self._b(0x17, 0x50 | n)
+    def exts_w(self, n): self._b(0x17, 0xD0 | n)                                        # exts.w rn
+    def shll_w(self, n): self._b(0x10, 0x10 | n)                                        # shll.w rn
+    def add_w_imm(self, imm, n): self._b(0x79, 0x10 | n, (imm >> 8) & 0xFF, imm & 0xFF)  # add.w #imm,rn
     def extu_l(self, n): self._b(0x17, 0x70 | n)
     def mulxu_b(self, src, n): self._b(0x50, (R8[src] << 4) | n)                       # rn(16) = rn.l * src
     def add_l_rr(self, src, dst): self._b(0x0A, 0x80 | (src << 4) | dst)

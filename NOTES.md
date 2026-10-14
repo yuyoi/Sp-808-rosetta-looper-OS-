@@ -249,6 +249,22 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.92 (1192, 2026-10-15, emulator-tested, NOT on hw): DDS-DSP LFO
+- **LFO tab** (DDS-DSP menu: OSCILLATORS / SAMPLE ATTACK / ENVELOPES / MODULATION): WAVE (TRIANGLE / SQUARE / SAW /
+  RANDOM = sample & hold per cycle), RATE (0.2-15 Hz), PITCH (0-16 = up to a semitone, shown in cents), FILTER (0-16 =
+  up to +-64 knob units on the cutoff), LEVEL (0-16 = tremolo depth), DELAY (fade-in after each note-on, 50-8000 ms).
+- One global LFO on the host (no DSP words: DSP1 is full), phase from the 1 ms clock, applied at most every 15 ms:
+  - vibrato: LFO_OFF (signed 1/16 semitones) is added in keys_osc_note (osc table index) and picks the sample's pitch
+    fields from `ratio_fine` (61 keys x 16 steps); only sounding voices are rewritten, only when the offset changes.
+  - tremolo: TREMF (1..64) scales every level write (`trem_scale`: 2 x level x TREMF / 64), so the envelopes and the
+    LFO never fight over the level coefficient.
+  - filter: FLFO is added after knob A + filter env in kv_env (clamped 0..126).
+  - Signed math stays unsigned with u = v + 64: offset = (u x depth >> 6) - depth.
+- Back to rest when every depth is 0 (offset 0, TREMF 64, FLFO 0 written once).
+- Emulator (`tools/test_lfo.py`): vibrato TRIANGLE 2 Hz PITCH 16 swings the saw 246.9-276.2 Hz around C4 (one
+  semitone each way), the sample's pitch fields by 1.116 (2^(2/12) = 1.12); PITCH 0 -> 261.6 Hz again; tremolo SQUARE
+  4 Hz LEVEL 16 = level target 96 <-> 1; FILTER 16 SAW 2 Hz = cutoff offset +63 .. -64; DELAY 500 ms fades in.
+
 ### v1.91 (1191, 2026-10-15, emulator-tested, NOT on hw): ROUTING + LAB tiles, Mac page engine
 - **Mac page engine** (build_v10 `MAC_PAGES`): one table-driven generator for every Classic Mac page (window, 3-row
   list, submode menu with full names and `>`, scroll bars for lists and menus > 3). DDS-DSP moved onto it. Item =

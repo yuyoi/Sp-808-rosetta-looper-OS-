@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1191, '1.91'              # 1.91 = ROUTING page (mixer + FX location), Mac page engine (1.9: DDS tabs)
+VERSION, VER_TXT = 1192, '1.92'              # 1.92 = DDS-DSP LFO (1.91: ROUTING / LAB / MFX, Mac page engine)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -377,6 +377,17 @@ LA_MS = (0, 10, 20, 30, 50, 75, 100, 150, 200, 300, 400, 500, 700, 1000, 1500, 2
 LAF_MS = (1, 10, 20, 30, 50, 75, 100, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000)   # sample fade-out
 # items: (label, RAM, min, max, apply routine, display: ('n',) number, ('t', table, suffix), ('o', table, suffix) = OFF at
 # 0, ('oct',)). Columns: even index left (x 5, max 13 characters), odd right.
+# LFO (v1.92): one global LFO (like a JP-8000's LFO1) on the host, 15 ms updates: PITCH = vibrato on the oscillators
+# (1/16-semitone osc table) and the sample (fine ratio table, 16 steps a semitone), LEVEL = tremolo (scales every
+# voice's level target), FILTER = added to the cutoff (knob A + filter env). DELAY fades it in after each note-on.
+KLFW, KLFR, KLFP, KLFF, KLFL, KLFD = (RAM_BASE + 0x4A0 + i for i in range(6))
+LFO_V, LFO_LA, TREMF, FLFO, LFO_SH, LFO_PP, LFO_OFF = (RAM_BASE + 0x4A6 + i for i in range(7))
+LFO_PH, LFO_RND, LFO_T, LFO_NT, LFO_U = RAM_BASE + 0x4AE, RAM_BASE + 0x4B0, RAM_BASE + 0x4B4, RAM_BASE + 0x4B8, RAM_BASE + 0x4BC
+LFO_HZ = (0.2, 0.3, 0.5, 0.7, 1, 1.5, 2, 3, 4, 5, 6, 7, 8, 10, 12, 15)
+LFO_INC = [round(65536 * hz / 1000) for hz in LFO_HZ]                 # phase (16 bit) per ms
+LFO_WAVES = ['TRIANGLE', 'SQUARE', 'SAW', 'RANDOM']
+VIB_CT = [round(d * 100 / 16) for d in range(17)]                     # PITCH depth -> cents (16 = a semitone)
+RATIO_FINE = [keysdsp.delta_fields(2 ** ((k - KEY_LO + f / 16) / 12))[:3] for k in range(NKEYS) for f in range(16)]
 DDS_TABS = [
     ('OSC', [('SAMPLE', KMXS, 0, 16, 'dds_ap0', ('n',)), ('SAW', KMXSAW, 0, 16, 'dds_ap1', ('n',)),
              ('SQUARE', KMXPUL, 0, 16, 'dds_ap2', ('n',)), ('WIDTH', KPW, 1, 15, 'dds_ap3', ('t', 'pw_pct', '%')),
@@ -386,8 +397,11 @@ DDS_TABS = [
             ('SAMPLE', KMXS, 0, 16, 'dds_ap0', ('n',))]),
     ('ENV', [('ATTACK', KATT, 0, 15, None, ('t', 'att_ms', 'MS')), ('DECAY', KDEC, 0, 15, None, ('o', 'dec_ms', 'MS')),
              ('SUSTAIN', KSUS, 0, 16, None, ('n',)), ('RELEASE', KREL, 0, len(REL_MS) - 1, None, ('t', 'rel_ms', 'MS')),
-             ('FLT ENV', KFENV, 0, 16, None, ('n',)), ('FLT DEC', KFDEC, 0, 15, None, ('o', 'dec_ms', 'MS'))])]
-DDS_DESC = ['OSCILLATORS', 'SAMPLE ATTACK', 'ENVELOPES']
+             ('FLT ENV', KFENV, 0, 16, None, ('n',)), ('FLT DEC', KFDEC, 0, 15, None, ('o', 'dec_ms', 'MS'))]),
+    ('LFO', [('WAVE', KLFW, 0, 3, None, ('s', 'lfo_wn', 4)), ('RATE', KLFR, 0, 15, None, ('s', 'lfo_rn', 16)),
+             ('PITCH', KLFP, 0, 16, None, ('t', 'vib_ct', 'C')), ('FILTER', KLFF, 0, 16, None, ('n',)),
+             ('LEVEL', KLFL, 0, 16, None, ('n',)), ('DELAY', KLFD, 0, 15, None, ('o', 'dec_ms', 'MS'))])]
+DDS_DESC = ['OSCILLATORS', 'SAMPLE ATTACK', 'ENVELOPES', 'MODULATION']
 # Classic Mac style pages (user's pick): window, pinstriped title bar, 3-row scrolling list, values right-aligned;
 # ENTER = the full-screen submode menu
 KDMENU, KDMSEL, KDTOP, KDY = (RAM_BASE + 0x3DC + i for i in range(4))   # menu open, menu cursor, first row shown, row y
@@ -492,6 +506,8 @@ for P_ in MAC_PAGES:
     MAC_STRS += [('s_%si%d_%d' % (P_['pid'], ti, i), it[0]) for ti, (_, items) in enumerate(P_['tabs'])
                  if not isinstance(items, str) for i, it in enumerate(items)]
 MAC_STRS += [('s_lbc%d' % i, n) for i, n in enumerate(LAB_CH_NAMES)]
+MAC_STRS += [('s_lfw%d' % i, n) for i, n in enumerate(LFO_WAVES)]
+MAC_STRS += [('s_lfr%d' % i, ('%g' % hz) + 'HZ') for i, hz in enumerate(LFO_HZ)]
 MAC_STRS += [('s_mfo0', 'OFF'), ('s_mfo1', 'ON')] + [('s_mfc%d' % i, n) for i, n in enumerate(MF_CODE_NAMES)]
 MAC_STRS += [('s_mfg%d' % i, n) for i, n in enumerate(MF_TGTS)]
 MAC_STRS += [('s_rtl%d' % i, n) for i, n in enumerate(RT_LOC_NAMES)] + [('s_rtp%d' % i, n) for i, (n, _) in enumerate(RT_PRESETS)]
@@ -1195,8 +1211,8 @@ def build():
     T_SHSEL = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_t')
     O_SHSEL = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_o2a')
     MXS_SHSEL = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_mxs')
-    def dsp_voice_level(v):                    # voice v: level target coefficient := VLVL[v]
-        a.mov_b_from_abs(VLVL + v, 'r0h'); a.add_b_rr('r0h', 'r0h')                   # x2: +6 dB (v1.72)
+    def dsp_voice_level(v):                    # voice v: level target coefficient := VLVL[v] (x tremolo, v1.92)
+        a.mov_b_from_abs(VLVL + v, 'r0l'); a.bsr16('trem_scale')                       # r0h = 2 * level * TREMF / 64
         a.mov_b_imm(T_SHSEL, 'r0l'); a.mov_w_rr(0, 8)
         a.mov_w_imm(dsp_addr('v%d_t' % v), 0); a.jsr('own_coef')
     def ramp_steps(var, inc_table, idx_var, skip):     # elapsed / period steps, so a slow pass (a draw) doesn't slow the ramp
@@ -1339,6 +1355,9 @@ def build():
     a.mov_b_from_abs(KOCT, 'r0l'); a.mov_b_imm(12, 'r1l'); a.mulxu_b('r1l', 0)                 # r0 = 12 * OCT
     a.mov_b_rr('r4l', 'r1l'); a.extu_w(1); a.add_w_rr(1, 0)                                   # + key = MIDI - 12
     for _ in range(4): a.add_w_rr(0, 0)                                                       # x16 (1/16 semitones)
+    a.mov_b_from_abs(LFO_OFF, 'r1l'); a.exts_w(1); a.add_w_rr(1, 0); a.bpl('kon_p'); a.mov_w_imm(0, 0)   # + vibrato (v1.92)
+    a.label('kon_p'); a.cmp_w_imm(len(OSC_TAB) // 3 - 16, 0); a.bcs('kon_c'); a.mov_w_imm(len(OSC_TAB) // 3 - 16, 0)
+    a.label('kon_c')
     a.extu_l(0); a.mov_l_rr(0, 5); a.add_l_rr(5, 5); a.add_l_rr(0, 5)                         # er5 = index * 3
     a.mov_l_imm('osc_tab', 1); a.add_l_rr(1, 5)
     for k, tab in enumerate(('o2a', 'o1a', 'o0a')):
@@ -1606,6 +1625,89 @@ def build():
     a.mov_b_from_abs(KSRC, 'r0l'); a.extu_w(0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
     a.label('ks_out'); a.rts()
 
+    a.label('trem_scale')                      # r0l = level -> r0h = 2 * level * TREMF / 64 (r1 kept)
+    a.push_w(1); a.add_b_rr('r0l', 'r0l'); a.mov_b_from_abs(TREMF, 'r1l'); a.mulxu_b('r1l', 0)
+    a.shll_w(0); a.shll_w(0); a.pop_w(1); a.rts()                                  # (x * 4) >> 8 = x >> 6
+    a.label('lfo_tick')                        # v1.92: one LFO for all voices
+    a.push_l(4); a.push_l(5); a.push_l(6)
+    a.mov_b_from_abs(KLFP, 'r0l'); a.mov_b_from_abs(KLFF, 'r0h'); a.or_b_rr('r0h', 'r0l')
+    a.mov_b_from_abs(KLFL, 'r0h'); a.or_b_rr('r0h', 'r0l'); a.bne16('lt_on')
+    a.mov_b_from_abs(LFO_OFF, 'r0l'); a.mov_b_from_abs(FLFO, 'r0h'); a.or_b_rr('r0h', 'r0l')   # all depths 0:
+    a.mov_b_from_abs(TREMF, 'r0h'); a.xor_b_imm(64, 'r0h'); a.or_b_rr('r0h', 'r0l'); a.beq16('lt_x')   # put back once
+    set_byte(LFO_V, 0); a.bra16('lt_apply')
+    a.label('lt_on')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LFO_T, 1); a.sub_l(1, 0)                     # er0 = ms since last
+    a.mov_l_from_abs(TICK_MS, 1); a.mov_l_to_abs(1, LFO_T)
+    a.cmp_l_imm(200, 0); a.bcs('lt_dt'); a.mov_l_imm(200, 0)
+    a.label('lt_dt')
+    a.mov_b_from_abs(KLFR, 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_rr(1, 1); a.mov_l_imm('lfo_inc', 2); a.add_l_rr(1, 2)
+    a.mov_w_ld(2, 1); a.mulxu_w(1, 0)                                                         # er0 = ms * inc
+    a.mov_w_from_abs(LFO_PH, 1); a.add_w_rr(0, 1); a.mov_w_to_abs(1, LFO_PH)                  # phase (wraps)
+    a.mov_b_rr('r1h', 'r0l')                                                                  # r0l = p = 0..255
+    a.mov_b_from_abs(KLFW, 'r1l')
+    a.cmp_b_imm(1, 'r1l'); a.beq('lt_sq'); a.cmp_b_imm(2, 'r1l'); a.beq('lt_saw'); a.cmp_b_imm(3, 'r1l'); a.beq('lt_rnd')
+    a.cmp_b_imm(128, 'r0l'); a.bcc('lt_tdn')                                                  # TRIANGLE
+    a.add_b_imm(0xC0, 'r0l'); a.bra16('lt_v')                                                 # p - 64
+    a.label('lt_tdn'); a.mov_b_rr('r0l', 'r1l'); a.mov_b_imm(191, 'r0l'); a.sub_b_rr('r1l', 'r0l'); a.bra16('lt_v')
+    a.label('lt_sq'); a.cmp_b_imm(128, 'r0l'); a.mov_b_imm(63, 'r0l'); a.bcs16('lt_v'); a.mov_b_imm(0xC0, 'r0l'); a.bra16('lt_v')
+    a.label('lt_saw'); a.shlr_b('r0l'); a.mov_b_rr('r0l', 'r1l'); a.mov_b_imm(63, 'r0l'); a.sub_b_rr('r1l', 'r0l'); a.bra16('lt_v')
+    a.label('lt_rnd')                                                                         # RANDOM: new value each cycle
+    a.mov_b_from_abs(LFO_PP, 'r1l'); a.mov_b_to_abs('r0l', LFO_PP); a.cmp_b_rr('r1l', 'r0l'); a.bcc('lt_hold')
+    a.mov_w_from_abs(LFO_RND, 0); a.mov_w_imm(75, 1); a.mulxu_w(1, 0); a.add_w_imm(74, 0); a.mov_w_to_abs(0, LFO_RND)
+    a.mov_b_rr('r0h', 'r0l'); a.and_b_imm(0x7F, 'r0l'); a.add_b_imm(0xC0, 'r0l'); a.mov_b_to_abs('r0l', LFO_SH)
+    a.label('lt_hold'); a.mov_b_from_abs(LFO_SH, 'r0l')
+    a.label('lt_v')                                                                           # r0l = v (-64..63)
+    a.mov_b_from_abs(KLFD, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.beq16('lt_nd')                    # DELAY: fade in
+    a.push_w(0)
+    a.mov_b_rr('r1l', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0); a.mov_l_imm('dec_ms', 1); a.add_l_rr(0, 1)
+    a.mov_w_ld(1, 1)                                                                          # r1 = delay ms
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LFO_NT, 2); a.sub_l(2, 0)                  # er0 = ms since note-on
+    a.extu_l(1); a.cmp_l_rr(1, 0); a.bcc('lt_full')                                           # past the delay
+    a.shll_l(0); a.shll_l(0); a.shll_l(0); a.shll_l(0); a.shll_l(0); a.shll_l(0)               # e * 64
+    a.divxu_w(1, 0)                                                                           # r0 = 64 * e / d
+    a.mov_b_rr('r0l', 'r2h'); a.pop_w(0)                                                      # r2h = fade 0..64
+    a.mov_b_rr('r0l', 'r1l'); a.add_b_imm(64, 'r1l'); a.mulxu_b('r2h', 1)                     # r1 = (v + 64) * f
+    for _ in range(2): a.shll_w(1)                                                            # r1h = (v + 64) * f / 64
+    a.mov_b_rr('r2h', 'r0l'); a.mov_b_rr('r1h', 'r1l'); a.sub_b_rr('r0l', 'r1l'); a.mov_b_rr('r1l', 'r0l')   # - f
+    a.bra('lt_nd')
+    a.label('lt_full'); a.pop_w(0)
+    a.label('lt_nd'); a.mov_b_to_abs('r0l', LFO_V)
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LFO_U, 1); a.sub_l(1, 0); a.cmp_l_imm(15, 0); a.bcs16('lt_x')   # 15 ms
+    a.label('lt_apply')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LFO_U)
+    a.mov_b_from_abs(LFO_V, 'r4l'); a.add_b_imm(64, 'r4l')                                     # r4l = u = v + 64 (0..127)
+    def depth(var, shift, sub):                # r0l = ((u * depth) >> shift) - depth * sub   (signed result)
+        a.mov_b_rr('r4l', 'r0l'); a.mov_b_from_abs(var, 'r1l'); a.mulxu_b('r1l', 0)
+        for _ in range(shift): a.shlr_w(0)
+        a.mov_b_from_abs(var, 'r1l')
+        if sub == 64: a.mov_b_imm(0, 'r1h'); a.sub_b_rr('r1l', 'r0l')                      # (u*d >> 6) - d
+        else:
+            for _ in range({4: 2}[sub]): a.shll_b('r1l')
+            a.sub_b_rr('r1l', 'r0l')                                                          # (u*d >> 4) - 4 d
+    depth(KLFF, 4, 4); a.mov_b_to_abs('r0l', FLFO)                                            # filter: -64..+63
+    a.mov_b_rr('r4l', 'r0l'); a.mov_b_from_abs(KLFL, 'r1l'); a.mulxu_b('r1l', 0)
+    for _ in range(5): a.shlr_w(0)
+    a.mov_b_rr('r0l', 'r1l'); a.mov_b_imm(64, 'r0l'); a.sub_b_rr('r1l', 'r0l')                # TREMF = 64 - (u*L >> 5)
+    a.mov_b_from_abs(TREMF, 'r1l'); a.cmp_b_rr('r0l', 'r1l'); a.beq16('lt_nt'); a.mov_b_to_abs('r0l', TREMF)
+    for v in range(NV):                                                                       # tremolo: levels again
+        nx = uniq('ltl'); a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq(nx); dsp_voice_level(v); a.label(nx)
+    a.label('lt_nt')
+    depth(KLFP, 6, 64)                                                                        # vibrato: 1/16 semitones
+    a.mov_b_from_abs(LFO_OFF, 'r1l'); a.cmp_b_rr('r0l', 'r1l'); a.beq16('lt_x'); a.mov_b_to_abs('r0l', LFO_OFF)
+    for v in range(NV):                                                                       # every sounding voice
+        nx = uniq('ltp')
+        a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16(nx)
+        a.mov_l_imm(v, 6); a.mov_b_from_abs(VKEY + v, 'r4l'); a.bsr16('keys_osc_note')        # oscillators
+        a.mov_b_rr('r4l', 'r0l'); a.extu_w(0); for_ = None
+        for _ in range(4): a.add_w_rr(0, 0)                                                   # key * 16
+        a.mov_b_from_abs(LFO_OFF, 'r1l'); a.exts_w(1); a.add_w_rr(1, 0); a.bpl(nx + 'p'); a.mov_w_imm(0, 0)
+        a.label(nx + 'p'); a.cmp_w_imm(len(RATIO_FINE), 0); a.bcs(nx + 'c'); a.mov_w_imm(len(RATIO_FINE) - 1, 0)
+        a.label(nx + 'c'); a.extu_l(0); a.mov_l_rr(0, 5); a.add_l_rr(5, 5); a.add_l_rr(0, 5); a.add_l_rr(5, 5)   # * 6
+        a.mov_l_imm('ratio_fine', 1); a.add_l_rr(1, 5)
+        for tab in ('d2', 'd1', 'd0'):                                                        # the sample
+            a.mov_w_ld(5, 8); a.adds1(5); a.adds1(5); dsp_voice_coef(tab)
+        a.label(nx)
+    a.label('lt_x'); a.pop_l(6); a.pop_l(5); a.pop_l(4); a.rts()
     a.label('keys_padleds')                    # v1.91: held keys on the pad LEDs (pad p = key id p + 17)
     a.mov_w_imm(0, 2)
     for v in range(NV):
@@ -1650,6 +1752,7 @@ def build():
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.bne16('ki_np')
     a.bsr16('ki_voices')                       # voices before any drawing: a draw costs milliseconds
     a.bsr16('keys_padleds')
+    a.bsr16('lfo_tick')
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_KEYS, 'r0l'); a.beq('ki_pg'); a.cmp_b_imm(P_KSET, 'r0l'); a.beq('ki_pg')
     a.cmp_b_imm(P_DDS, 'r0l'); a.bne16('ki_pout')
     a.label('ki_pg')
@@ -1837,6 +1940,11 @@ def build():
     a.cmp_b_imm(127, 'r0l'); a.bcs('kve_fk')
     a.label('kve_fc'); a.mov_b_imm(126, 'r0l')
     a.label('kve_fk')
+    a.mov_b_from_abs(FLFO, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.beq('kve_fl'); a.bmi('kve_fn')   # + LFO (v1.92), 0..126
+    a.add_b_rr('r1l', 'r0l'); a.cmp_b_imm(127, 'r0l'); a.bcs('kve_fl'); a.mov_b_imm(126, 'r0l'); a.bra('kve_fl')
+    a.label('kve_fn'); a.mov_b_imm(0, 'r2l'); a.sub_b_rr('r1l', 'r2l'); a.sub_b_rr('r2l', 'r0l'); a.bcc('kve_fl')
+    a.mov_b_imm(0, 'r0l')
+    a.label('kve_fl')
     a.mov_b_from_abs(KFE_LAST, 'r1l'); a.cmp_b_rr('r0l', 'r1l'); a.beq('kve_out')
     a.mov_b_to_abs('r0l', KFE_LAST); a.bsr16('keys_cut_env')
     a.label('kve_out'); a.rts()
@@ -1905,6 +2013,7 @@ def build():
     a.bsr16('keys_osc_note')                                                         # DDS oscillators
     a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VLX)                                         # no handoff (loop off)
     a.bsr16('la_reset')                                                              # its sample level back if LA faded it
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LFO_NT)                          # LFO DELAY counts from here
     a.mov_b_from_abs(KFENV, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kn_nofe')            # filter env: retrigger (paraphonic)
     a.shll_b('r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.mov_b_to_abs('r0l', KFE_CUR)   # amount x 8 knob units
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, KFE_T)
@@ -3405,6 +3514,14 @@ def build():
     for i in range(len(MF_TGTS)): a.dc_l('s_mfg%d' % i)
     a.label('mf_c2i'); a.raw(bytes(MF_C2I)); a.align2()
     a.label('led_codes'); a.raw(bytes(LED_CODES)); a.align2()
+    a.label('lfo_inc'); a.raw(struct.pack('>16H', *LFO_INC))
+    a.label('vib_ct'); a.raw(struct.pack('>17H', *VIB_CT))
+    a.label('ratio_fine')                                      # key * 16 + 1/16 semitone -> the 3 pitch fields (e0 format)
+    for c2, c1, c0 in RATIO_FINE: a.raw(struct.pack('>HHH', c2 << 8, c1 << 8, c0 << 8))
+    a.label('lfo_wn')
+    for i in range(len(LFO_WAVES)): a.dc_l('s_lfw%d' % i)
+    a.label('lfo_rn')
+    for i in range(len(LFO_HZ)): a.dc_l('s_lfr%d' % i)
     a.label('vu_map')                                           # level 0..127 -> lit pads (4.5 dB each) as bits
     a.raw(bytes(0 if v == 0 else (1 << max(0, min(8, round(8 + 20 * math.log10(v / 127) / 4.5)))) - 1 for v in range(128)))
     a.align2()
@@ -3510,6 +3627,8 @@ def main(raw, outdir):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
                          (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0),
+                         (KLFW, 0), (KLFR, 6), (KLFP, 0), (KLFF, 0), (KLFL, 0), (KLFD, 0), (TREMF, 64), (FLFO, 0),
+                         (LFO_OFF, 0), (LFO_V, 0), (LFO_SH, 0), (LFO_PP, 0),
                          (MSLOT, 12), (MSLOT + 1, 0), (MSLOT + 2, 0), (MLVL, 64), (MLVL + 1, 64), (MLVL + 2, 64),
                          *((MCTRL + i, 0) for i in range(6)), *((MCLAST + i, 0xFF) for i in range(6))):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)

@@ -29,7 +29,7 @@ def main(image_path, out):
     sim.key(bm.K_ENTER); sim.run(20); print('LOOP       KLOOP %d (expect 0)' % e.rb(bm.KLOOP))
     sim.key(bm.K_UP); sim.key(bm.K_UP); sim.key(bm.K_UP)
     for _ in range(3): sim.key(bm.K_RIGHT)
-    print('RELEASE    KREL %d (expect 10)' % e.rb(bm.KREL))
+    print('RELEASE    KREL %d (expect 9: 7 + 3 steps, the table ends at 9)' % e.rb(bm.KREL))
     sim.knobs[6] = 60; sim.knobs[7] = 90; sim.knobs[8] = 40; sim.run(60)
     for _ in range(4): sim.key(bm.K_DOWN)
     k0 = e.rb(bm.KNOB); sim.key(bm.K_RIGHT); sim.key(bm.K_LEFT); sim.key(bm.K_LEFT)
