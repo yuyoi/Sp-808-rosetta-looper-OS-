@@ -25,9 +25,10 @@ G0, V0, VSTRIDE = 0x3C, 0x100, 44
 AGE, REC, PK, T1 = 0x20, 0x22, 0x24, 0x26
 AGE_E, REF = 0x28, 0x2A                                 # age since the take's END (reverse); the voices' read reference
 VS, LP, BP, HP = 0x90, 0x92, 0x94, 0x96                 # voice sum (filter input), state-variable filter lp / bp / hp
+SOFF = 0x2C                                             # loop start offset (16.8, raw): a voice with sel on starts there
 G1 = 0x50                                               # second global block: AGE_E, REF, the filter (before the voices)
-def vslot(v, k): return 0x30 + 12 * v + 2 * k          # per voice: PHI, LVL, NX, SMP, OUT (+1 spare pair)
-PHI, LVL, NX, SMP, OUT = 0, 1, 2, 3, 4
+def vslot(v, k): return 0x30 + 12 * v + 2 * k          # per voice: PHI, LVL, NX, SMP, OUT, S1/S2 (head temps)
+PHI, LVL, NX, SMP, OUT, SH = 0, 1, 2, 3, 4, 5
 
 E = esp.encode
 SH7, SH6, SH5, SH3 = 0, 1, 2, 3                        # shift selector values
@@ -74,9 +75,14 @@ def build(nvoices=NVOICES):
     put(g + 5, E(0x04, AGE, SH6, 64), 'ref_f')                 # A = AGE * f
     put(g + 6, E(0x00, AGE_E, SH6, 0), 'ref_r')                # A += AGE_E * r
     put(g + 9, E(0x40, REF, SH7, 0))                           # i[REF] = raw(A(+6))
+    # SOFF = loop start (16.8) = a * 2048 + b * 32 + c / 2 samples, three host-written fields (raw store: wraps)
+    put(g + 10, E(0x04, 4, SH3, 0), 'soff_a')                  # A = 0x400000 * a >> 3 = a * 0x80000
+    put(g + 11, E(0x00, 3, SH3, 0), 'soff_b')                  # A += 0x10000 * b >> 3 = b * 0x2000
+    put(g + 12, E(0x00, 2, SH3, 0), 'soff_c')                  # A += 0x400 * c >> 3 = c * 0x80
+    put(g + 15, E(0x40, SOFF, SH7, 0))                         # i[SOFF] = raw(A(+12))
     # ---- state-variable low-pass on the previous sample's voice sum (Chamberlin), 15-bit coefficients ----
     #   lp' = lp + f*bp ; hp = x - lp' - q*bp ; bp' = bp + f*hp      (f: SH7 + lo7, q: SH6 + lo7, q_hi negative)
-    f = g + 10
+    f = g + 16
     put(f + 0, E(0x04, LP + 1, SH6, 64))                       # A = lp
     put(f + 1, E(0x00, BP + 1, SH7, 0), 'flt_f1')              # A += bp * f_hi
     put(f + 2, E(0x34, 0xC6, SH7, 0), 'flt_f1l')               # A += bp * f_lo / 128           -> lp'
@@ -110,35 +116,36 @@ def build(nvoices=NVOICES):
         put(b + 6, E(0x00, 1, SH7, 0), 'v%d_d0' % v)            # A += c0 / 8 (c0 multiple of 8)  -> PHI_new
         put(b + 7, E(0x34, 0xA1 | (mck << 1), SH7, 0))          # mc[k] = sat(B(+4)) = L_new
         put(b + 9, E(0x44, phi, SH6, 64), 'v%d_dir' % v)        # i[PHI] = raw(A(+6)); A = +PHI (fwd) / -PHI (rev)
-        put(b + 10, E(0x00, REF, SH6, -64 & 0xFF))              # A -= REF -> -X (fwd: PHI - AGE, rev: -PHI - AGE_E)
-        put(b + 13, E(0x44, nx, SH3, -128 & 0xFF))              # i[NX] = raw(A(+10)) = -X; A = -X * -16 = 16 X
-        put(b + 16, E(0x34, 0xC7, SH7, 0) | (0x18 << 23), 'v%d_rdA' % v, 'eram')   # eramvar = A(+13); READvar (+0)
-        put(b + 22, 0x18 << 23, 'v%d_rdB' % v, 'eram')          # READvar start #2, imm 2 (+1 sample)
-        put(b + 23, 0x02 << 23)
-        put(b + 26, E(0x34, 0xCC, SH7, 0))                      # i[FC] = eramrd  (read A, start + 10)
-        put(b + 27, op30(6, flip=True, clear=True, mem=0xFC))   # A = i[FC] * (1 - frac)
-        put(b + 28, dmac())
-        put(b + 32, E(0x34, 0xCD, SH7, 0))                      # i[FD] = eramrd  (read B, start + 10)
-        put(b + 33, op30(6, clear=False, mem=0xFD))             # A += i[FD] * frac
-        put(b + 34, dmac())                                     # -> A = interpolated sample
-        put(b + 37, E(0x58, smp, SH7, 0))                       # i[SMP] = sat(A(+34))
-        put(b + 38, op30(mck, acc_b=True, clear=True, mem=smp)) # B = sample * L
-        put(b + 39, dmac(acc_b=True))
-        put(b + 42, E(0x1C, out, SH7, 0))                       # i[OUT] = sat(B(+39)); B cleared
+        put(b + 10, E(0x00, REF, SH6, -64 & 0xFF))              # A -= REF
+        put(b + 11, E(0x00, SOFF, SH6, 0), 'v%d_sel' % v)       # A += SOFF * sel (loop continuation: +64 fwd / -64 rev)
+        put(b + 14, E(0x44, nx, SH3, -128 & 0xFF))              # i[NX] = raw(A(+11)) = -X; A = -X * -16 = 16 X
+        put(b + 17, E(0x34, 0xC7, SH7, 0) | (0x18 << 23), 'v%d_rdA' % v, 'eram')   # eramvar = A(+14); READvar (+0)
+        put(b + 23, 0x18 << 23, 'v%d_rdB' % v, 'eram')          # READvar start #2, imm 2 (+1 sample)
+        put(b + 24, 0x02 << 23)
+        put(b + 27, E(0x34, 0xCC, SH7, 0))                      # i[FC] = eramrd  (read A, start + 10)
+        put(b + 28, op30(6, flip=True, clear=True, mem=0xFC))   # A = i[FC] * (1 - frac)
+        put(b + 29, dmac())
+        put(b + 33, E(0x34, 0xCD, SH7, 0))                      # i[FD] = eramrd  (read B, start + 10)
+        put(b + 34, op30(6, clear=False, mem=0xFD))             # A += i[FD] * frac
+        put(b + 35, dmac())                                     # -> A = interpolated sample
+        put(b + 38, E(0x58, smp, SH7, 0))                       # i[SMP] = sat(A(+35))
+        put(b + 39, op30(mck, acc_b=True, clear=True, mem=smp)) # B = sample * L
+        put(b + 40, dmac(acc_b=True))
+        put(b + 43, E(0x1C, out, SH7, 0))                       # i[OUT] = sat(B(+40)); B cleared
         outs.append(out)
     # ---- mixer: voices + pass-through -> i[13] (L) and i[19] (R) ----
     m = V0 + VSTRIDE * nvoices
     for k, out in enumerate(outs):
         put(m + k, E(0x04 if k == 0 else 0x00, out, SH6, 64))
     n = len(outs)
-    put(m + n + 2, E(0x58, VS, SH7, 0))                         # i[VS] = sat(A(+n-1)) = voice sum
-    put(m + n + 3, E(0x04, LP, SH6, 0), 'flt_wet')              # A = lp' * wet       (filter on: 64)
-    put(m + n + 4, E(0x00, VS, SH6, 64), 'flt_dry')             # A += voices * dry   (filter off: 64)
-    put(m + n + 5, E(0x00, 0x12, SH6, 0), 'thru_l')             # A += inL * thru
-    put(m + n + 6, E(0x00, 0x18, SH6, 0), 'thru_r')             # A += inR * thru
-    put(m + n + 9, E(0x58, 0x13, SH7, 0))                       # i[13] = sat(A(+n+6))
-    put(m + n + 10, E(0x58, 0x19, SH7, 0))                      # i[19] = same
-    end = m + n + 11
+    put(m + n, E(0x00, 0x12, SH6, 0), 'thru_l')                 # A += inL * thru
+    put(m + n + 1, E(0x00, 0x18, SH6, 0), 'thru_r')             # A += inR * thru
+    put(m + n + 2, E(0x58, VS, SH7, 0))                         # i[VS] = sat(A(+n-1)) = the voices alone
+    put(m + n + 3, E(0x00, LP, SH6, 0), 'flt_wet')              # A += lp' * wet          (filter on: 64)
+    put(m + n + 4, E(0x00, VS, SH6, 0), 'flt_dry')              # A += voices * (dry - 1) (filter on: -64)
+    put(m + n + 7, E(0x58, 0x13, SH7, 0))                       # i[13] = sat(A(+n+4))
+    put(m + n + 8, E(0x58, 0x19, SH7, 0))                       # i[19] = same
+    end = m + n + 9
     assert end <= 0x2F2 and all(w == 0 for w in prog[0xF1:0x100]), 'program layout'
     return prog, params
 
@@ -154,6 +161,11 @@ def filt_f(k):
     f = 2 * math.sin(math.pi * cutoff_hz(k) / FS)          # Chamberlin f, SH7: value = (hi + lo/128) / 128
     v = max(1, min(127 * 128 + 127, round(f * 128 * 128)))
     return v >> 7, v & 0x7F
+def soff_fields(samples):
+    """loop start in samples (0..65535.5) -> (a, b, c) with a * 2048 + b * 32 + c / 2 = samples; all in 0..127."""
+    h = int(round(samples * 2))
+    a, r = divmod(h, 4096); b, c = divmod(r, 64)
+    return a, b, c
 def filt_q(k):
     q = 1.4 - (1.4 - 0.07) * (k / 127.0)                   # knob 0 = no resonance (q 1.4), 127 = screaming (q 0.07)
     v = round(-q * 64 * 128)                               # SH6: value = (hi + lo/128) / 64, negative

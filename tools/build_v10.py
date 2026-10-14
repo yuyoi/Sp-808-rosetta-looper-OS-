@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1160, '1.6'               # 1.6 = 1.5 + EDIT tile: filter (knobs A/B), attack (C), reverse; Roland's DSP1 writes gated
+VERSION, VER_TXT = 1170, '1.7'               # 1.7 = 1.6 + LOOP (sustain while held, voice handoff with crossfade)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -352,6 +352,12 @@ VTGT = RAM_BASE + 0x2E0                                             # per voice:
 KATT, KREV, KSCUR, KAEP = (RAM_BASE + 0x2E8 + i for i in range(4))  # attack index 0-15, reverse, EDIT cursor, AGE_E pending
 KATT_T, KNOB, KGATE, KAE_T, KNOB_T = RAM_BASE + 0x2EC, RAM_BASE + 0x2F0, RAM_BASE + 0x2F3, RAM_BASE + 0x2F4, RAM_BASE + 0x2F8
 KROW = RAM_BASE + 0x300                                             # 32-byte text row for the EDIT page
+# loop: a held note hands over to a fresh voice that starts at the loop start, 40 ms crossfade (source time)
+KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BASE + 0x324, RAM_BASE + 0x326, RAM_BASE + 0x39C
+VKEY, VLINK, VXF, VXL0 = RAM_BASE + 0x328, RAM_BASE + 0x330, RAM_BASE + 0x338, RAM_BASE + 0x340   # per voice (bytes)
+VXD, VLX, VXS = RAM_BASE + 0x348, RAM_BASE + 0x358, RAM_BASE + 0x378   # crossfade ms (words); next handoff, fade start (longs)
+# voice states: 0 idle, 1 waiting start, 2 held, 3 releasing, 4 attacking, 5 handing over (fade out),
+#               6 taking over (fade in), 7 continuation waiting for its crossfade
 MRING, MWR, MRD, KRELSTR = RAM_BASE + 0x290, RAM_BASE + 0x2B0, RAM_BASE + 0x2B1, RAM_BASE + 0x2B4   # MIDI ring 16 x (key, vel); "200MS"
 RAM_VARS = (PAGE, CUR, WARN, MSTATE, REC_PAD, REC_HOLD, MSG, MCUR, D_PATH, D_T0, D_T, D_P, D_RES, SAVED_OK, GMODE,
             BOOTSND, SEG_PG, PEAK, PEAK_HOLD, HIST_N, HIST_CNT, HIST_MAX, METER_N,
@@ -633,15 +639,21 @@ def build():
     a.bsr16('keys_exit')
 
     a.label('k_kset')                                     # EDIT page: UP/DOWN pick RELEASE / REVERSE, dial/ENTER change
-    a.cmp_w_imm(K_UP, 5); a.bne('kse_dn'); set_byte(KSCUR, 0); a.bra16('redraw')
-    a.label('kse_dn'); a.cmp_w_imm(K_DOWN, 5); a.bne('kse_v'); set_byte(KSCUR, 1); a.bra16('redraw')
+    a.cmp_w_imm(K_UP, 5); a.bne('kse_dn')
+    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l')
+    a.mov_b_to_abs('r0l', KSCUR); a.bra16('redraw')
+    a.label('kse_dn'); a.cmp_w_imm(K_DOWN, 5); a.bne('kse_v')
+    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq16('redraw'); a.add_b_imm(1, 'r0l')
+    a.mov_b_to_abs('r0l', KSCUR); a.bra16('redraw')
     a.label('kse_v')
     a.cmp_w_imm(K_LEFT, 5); a.beq('kse_lr'); a.cmp_w_imm(K_RIGHT, 5); a.beq('kse_lr')
     a.cmp_w_imm(K_ENTER, 5); a.bne16('k_other')
-    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(1, 'r0l'); a.bne16('redraw')       # ENTER toggles REVERSE only
+    a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw')       # ENTER toggles REVERSE / LOOP
     a.label('kse_lr')
     a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kse_rel')
+    a.cmp_b_imm(2, 'r0l'); a.beq('kse_lp')
     a.bsr16('keys_rev_toggle'); a.bra16('redraw')
+    a.label('kse_lp'); a.bsr16('keys_loop_toggle'); a.bra16('redraw')
     a.label('kse_rel'); a.mov_b_from_abs(KREL, 'r0l')
     a.cmp_w_imm(K_LEFT, 5); a.beq('kse_rd')
     a.cmp_b_imm(len(REL_MS) - 1, 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l'); a.bra('kse_rs')
@@ -827,9 +839,16 @@ def build():
     row_put('OFF'); a.bra('dks_e')
     a.label('dks_on'); row_put('ON')
     a.label('dks_e'); row_end(5, 27)
+    a.mov_l_imm(KROW, 1); row_put('LOOP ')
+    a.mov_b_from_abs(KLOOP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dks_lon')
+    row_put('OFF'); a.bra('dks_le')
+    a.label('dks_lon'); row_put('ON')
+    a.label('dks_le'); row_end(61, 27)
     a.mov_b_from_abs(KSCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dks_c1')
     D.text(1, 21, 's_gt', 'font_tiny'); a.bra16('d_flush')
-    a.label('dks_c1'); D.text(1, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
+    a.label('dks_c1'); a.cmp_b_imm(1, 'r0l'); a.bne('dks_c2')
+    D.text(1, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
+    a.label('dks_c2'); D.text(57, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
 
     a.label('d_flush')
     a.bsr16('gfx_flush')
@@ -865,6 +884,19 @@ def build():
             a.cmp_w_imm(48, 0); a.bcs(skip + '_c2'); a.mov_w_imm(48, 0)
             a.label(skip + '_c2')
         a.mov_b_rr('r0l', 'r2l')
+    def vptr(base, stride=1):                  # er1 = base + stride * voice   (er6 = voice, zero-extended)
+        a.mov_l_rr(6, 1)
+        if stride >= 2: a.add_l_rr(1, 1)
+        if stride == 4: a.add_l_rr(1, 1)
+        a.add_l_imm(base, 1)
+    def ld_b(base, reg): vptr(base); a.mov_b_ld(1, reg)
+    def st_b(reg, base): vptr(base); a.mov_b_st(reg, 1)
+    def ld_w(base, n): vptr(base, 2); a.mov_w_ld(1, n)
+    def st_w(n, base): vptr(base, 2); a.mov_w_st(n, 1)
+    def ld_l(base, n): vptr(base, 4); a.mov_l_ld_disp(0, 1, n)
+    def st_l(n, base): vptr(base, 4); a.mov_l_st(n, 1)
+    def vlevel_r6():                           # level coefficient of voice r6l := VLVL[voice]
+        ld_b(VLVL, 'r0h'); a.mov_b_imm(T_SHSEL, 'r0l'); a.mov_w_rr(0, 8); dsp_voice_coef('t')
     def dsp_coef_tab(name, table):             # coefficient of <name> := table[er4] (byte)
         a.mov_l_imm(table, 1); a.add_l_rr(4, 1); a.mov_b_ld(1, 'r0h')
         a.mov_b_imm(keysdsp.shsel(DSP_PROG, DSP_PARAMS, name), 'r0l'); a.mov_w_rr(0, 8)
@@ -887,7 +919,7 @@ def build():
         a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_KEYS, 'r0l'); a.bne16(lbl_no)
         a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne16(lbl_no)
     def voices_silent():
-        for v in range(NV): dsp_coef('v%d_t' % v, 0); set_byte(VSTATE + v, 0); set_byte(VPAD + v, 0xFF)
+        for v in range(NV): dsp_coef('v%d_t' % v, 0); set_byte(VSTATE + v, 0); set_byte(VPAD + v, 0xFF); set_byte(VXF + v, 0)
 
     a.label('keys_enter')                      # KEYS page opened: our program in DSP1, the master through the FX
     a.mov_w_from_abs(FX_CUR, 0); a.cmp_w_imm(0xFFFF, 0); a.beq('ke_ours')           # stock FX reloaded meanwhile?
@@ -981,6 +1013,130 @@ def build():
                            ('own_load', 0x1096D2, '01106df2')):
         a.label(gl); a.raw(bytes.fromhex(orig)); a.jmp(addr + 4)                    # ours: straight in
 
+    a.label('keys_loop_setup')                 # loop region from the take length L = KREC_MS:
+    a.push_l(2); a.push_l(3); a.push_l(4); a.push_l(5)   # LE = L - L/16, LS = 3L/8, XF = min(40, (LE-LS)/2) ms
+    a.mov_l_from_abs(KREC_MS, 0)
+    a.mov_w_rr(0, 2); a.mov_w_rr(0, 1); [a.shlr_w(1) for _ in range(4)]; a.sub_w_rr(1, 2)   # r2 = LE
+    a.mov_w_imm(3, 1); a.mulxu_w(1, 0); [a.shlr_w(0) for _ in range(3)]; a.mov_w_rr(0, 3)   # r3 = LS
+    a.mov_w_rr(2, 4); a.sub_w_rr(3, 4); a.mov_w_to_abs(4, LP_LL)                     # r4 = LL
+    a.mov_w_rr(4, 5); a.shlr_w(5); a.cmp_w_imm(40, 5); a.bcs('kls_xf'); a.mov_w_imm(40, 5)
+    a.label('kls_xf'); a.mov_w_to_abs(5, LP_XF)                                      # r5 = XF
+    a.mov_w_rr(2, 0); a.sub_w_rr(5, 0); a.mov_w_to_abs(0, LP_FIRST)                  # first handoff at LE - XF
+    a.mov_w_rr(3, 0); a.sub_w_rr(5, 0); a.mov_w_rr(0, 4)                             # r4 = S = LS - XF (ms)
+    a.extu_l(0); a.mov_w_imm(88, 1); a.mulxu_w(1, 0); a.mov_l_rr(0, 5)                # er5 = S * 88
+    a.mov_w_rr(4, 0); a.extu_l(0); a.mov_w_imm(5, 1); a.divxu_w(1, 0); a.extu_l(0)
+    a.add_l_rr(0, 5)                                                                 # er5 = S * 88.2 = half samples
+    for nm, sh, mask in (('soff_a', 12, 0xFF), ('soff_b', 6, 0x3F), ('soff_c', 0, 0x3F)):
+        a.mov_l_rr(5, 0); [a.shlr_l(0) for _ in range(sh)]; a.and_w_imm(mask, 0)
+        a.mov_b_rr('r0l', 'r0h'); a.mov_b_imm(keysdsp.shsel(DSP_PROG, DSP_PARAMS, nm), 'r0l'); a.mov_w_rr(0, 8)
+        a.mov_w_imm(dsp_addr(nm), 0); a.jsr('own_coef')
+    a.pop_l(5); a.pop_l(4); a.pop_l(3); a.pop_l(2); a.rts()
+    a.label('keys_loop_toggle')
+    a.mov_b_from_abs(KLOOP, 'r0l'); a.xor_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', KLOOP)
+    a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('klt_out')
+    voices_silent()
+    a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.bne('klt_out')
+    a.bsr16('keys_loop_setup')
+    a.label('klt_out'); set_byte(KDIRTY, 1); a.rts()
+
+    a.label('keys_loop')                       # every voice pass: prepare / start continuations, run the crossfades
+    a.mov_b_from_abs(KLOOP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('kl_go'); a.rts()
+    a.label('kl_go')
+    a.push_l(2); a.push_l(4); a.push_l(5); a.push_l(6)
+    a.mov_l_imm(0, 6)
+    a.label('kl_v')
+    ld_b(VSTATE, 'r0l')
+    a.cmp_b_imm(7, 'r0l'); a.beq16('kl_s7')
+    a.cmp_b_imm(5, 'r0l'); a.beq16('kl_fd'); a.cmp_b_imm(6, 'r0l'); a.beq16('kl_fd')
+    a.cmp_b_imm(2, 'r0l'); a.bcs16('kl_next')                                        # 0 idle, 1 waiting
+    ld_b(VXF, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('kl_next')                      # already handing over
+    ld_l(VLX, 0); a.sub_l_imm(3, 0); a.mov_l_from_abs(TICK_MS, 1); a.cmp_l_rr(0, 1); a.bcs16('kl_next')
+    a.bsr16('kl_prep'); a.bra16('kl_next')
+    a.label('kl_s7')
+    ld_l(VXS, 0); a.mov_l_from_abs(TICK_MS, 1); a.cmp_l_rr(0, 1); a.bcs16('kl_next')
+    a.bsr16('kl_start'); a.bra16('kl_next')
+    a.label('kl_fd'); a.bsr16('kl_fade')
+    a.label('kl_next')
+    a.add_b_imm(1, 'r6l'); a.cmp_b_imm(NV, 'r6l'); a.bcs16('kl_v')
+    a.pop_l(6); a.pop_l(5); a.pop_l(4); a.pop_l(2); a.rts()
+
+    a.label('kl_prep')                         # voice v = r6l nears the loop end: set up a continuation n
+    a.mov_b_rr('r6l', 'r5l')
+    a.mov_b_from_abs(KNEXT, 'r0l'); a.cmp_b_rr('r5l', 'r0l'); a.bne('klp_n')
+    a.add_b_imm(1, 'r0l'); a.and_b_imm(NV - 1, 'r0l')
+    a.label('klp_n'); a.mov_b_rr('r0l', 'r5h')                                      # r5h = n
+    a.add_b_imm(1, 'r0l'); a.and_b_imm(NV - 1, 'r0l'); a.mov_b_to_abs('r0l', KNEXT)
+    ld_b(VKEY, 'r4l'); ld_b(VPAD, 'r4h')
+    ld_b(VSTATE, 'r0l'); a.cmp_b_imm(3, 'r0l'); a.bne('klp_tg')
+    ld_b(VLVL, 'r2l'); a.bra('klp_tg2')                                              # releasing: carry its level
+    a.label('klp_tg'); ld_b(VTGT, 'r2l')
+    a.label('klp_tg2')
+    a.mov_b_imm(1, 'r0l'); st_b('r0l', VXF)
+    ld_l(VLX, 0); a.mov_l_to_abs(0, LTMP)                                            # crossfade start tick
+    a.mov_b_rr('r5h', 'r6l')                                                         # ---- voice n ----
+    a.mov_l_from_abs(LTMP, 0); st_l(0, VXS)
+    a.mov_b_rr('r5l', 'r0l'); st_b('r0l', VLINK)
+    st_b('r4l', VKEY); st_b('r4h', VPAD); st_b('r2l', VTGT)
+    a.mov_b_imm(0, 'r0l'); st_b('r0l', VLVL); st_b('r0l', VXF)
+    a.mov_b_rr('r4l', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0)
+    a.mov_l_imm('inv_ratio', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 1); a.mov_w_rr(1, 13)   # e5 = 4096 / ratio
+    a.mov_w_from_abs(LP_XF, 0); a.extu_l(0); a.mulxu_w(13, 0)
+    for _ in range(6): a.shlr_l2(0)
+    a.mov_w_rr(0, 0); a.bne('klp_d'); a.mov_w_imm(1, 0)
+    a.label('klp_d'); st_w(0, VXD); a.mov_w_to_abs(0, LTMP + 2)                      # crossfade length (note ms)
+    a.mov_w_from_abs(LP_LL, 0); a.extu_l(0); a.mulxu_w(13, 0)
+    for _ in range(6): a.shlr_l2(0)
+    ld_l(VXS, 1); a.add_l_rr(1, 0); st_l(0, VLX)                                     # its own handoff, one loop later
+    a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VEND)
+    a.mov_b_rr('r4l', 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_rr(0, 4); a.add_l_rr(0, 4); a.add_l_rr(0, 4)
+    a.add_l_rr(4, 4); a.mov_l_imm('ratio_tab', 1); a.add_l_rr(1, 4)                 # er4 = pitch fields of the key
+    for tab in ('d2', 'd1', 'd0'):
+        a.mov_w_ld(4, 8); a.adds1(4); a.adds1(4); dsp_voice_coef(tab)
+    a.mov_b_from_abs(KREV, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('klp_rv')
+    dsp_voice_coef('sel', 64); a.bra('klp_s')
+    a.label('klp_rv'); dsp_voice_coef('sel', -64)
+    a.label('klp_s')
+    dsp_voice_coef('t', 0); dsp_voice_coef('g', 0)                                   # reset: starts at the loop start
+    a.mov_b_imm(7, 'r0l'); st_b('r0l', VSTATE)
+    a.mov_b_rr('r5l', 'r6l')                                                         # ---- back to v ----
+    a.mov_w_from_abs(LTMP + 2, 0); st_w(0, VXD)
+    a.rts()
+
+    a.label('kl_start')                        # continuation n = r6l: go, and its old voice starts fading out
+    dsp_voice_coef('g', 64)
+    a.mov_b_imm(6, 'r0l'); st_b('r0l', VSTATE)
+    a.mov_l_from_abs(TICK_MS, 4); st_l(4, VXS)
+    a.mov_b_rr('r6l', 'r5l')
+    ld_b(VLINK, 'r0l'); a.mov_b_rr('r0l', 'r6l')
+    ld_b(VSTATE, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.bcs('kls_back'); a.cmp_b_imm(5, 'r0l'); a.bcc('kls_back')
+    ld_b(VXF, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kls_back')
+    a.mov_b_imm(5, 'r0l'); st_b('r0l', VSTATE)
+    ld_b(VLVL, 'r0l'); st_b('r0l', VXL0); st_l(4, VXS)
+    a.mov_b_imm(0xFF, 'r0l'); st_b('r0l', VPAD)                                      # the key now belongs to n
+    a.label('kls_back'); a.mov_b_rr('r5l', 'r6l'); set_byte(KDIRTY, 1); a.rts()
+
+    a.label('kl_fade')                         # r6l in state 5 (out) or 6 (in): level from elapsed / duration
+    a.mov_l_from_abs(TICK_MS, 0); ld_l(VXS, 1); a.sub_l(1, 0)                        # er0 = elapsed
+    ld_w(VXD, 4); a.extu_l(4)
+    a.cmp_l_rr(4, 0); a.bcc16('klf_done')
+    ld_b(VSTATE, 'r2l'); a.cmp_b_imm(5, 'r2l'); a.bne('klf_in')
+    ld_b(VXL0, 'r1l'); a.bra('klf_mul')
+    a.label('klf_in'); ld_b(VTGT, 'r1l')
+    a.label('klf_mul'); a.mov_b_rr('r1l', 'r2h'); a.extu_w(1)
+    a.mulxu_w(1, 0); a.divxu_w(4, 0)                                                 # r0 = X * e / d
+    a.cmp_b_imm(5, 'r2l'); a.bne('klf_set')
+    a.mov_b_rr('r2h', 'r1l'); a.sub_b_rr('r0l', 'r1l'); a.mov_b_rr('r1l', 'r0l')      # fading out: X - X e / d
+    a.label('klf_set'); st_b('r0l', VLVL); vlevel_r6(); a.rts()
+    a.label('klf_done')
+    ld_b(VSTATE, 'r0l'); a.cmp_b_imm(5, 'r0l'); a.bne('klf_din')
+    a.mov_b_imm(0, 'r0l'); st_b('r0l', VLVL); st_b('r0l', VSTATE); st_b('r0l', VXF)
+    a.mov_b_imm(0xFF, 'r0l'); st_b('r0l', VPAD); dsp_voice_coef('t', 0); a.rts()
+    a.label('klf_din')
+    ld_b(VTGT, 'r0l'); st_b('r0l', VLVL)
+    ld_b(VPAD, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq('klf_rel'); a.mov_b_imm(2, 'r0l'); a.bra('klf_st')
+    a.label('klf_rel'); a.mov_b_imm(3, 'r0l')
+    a.label('klf_st'); st_b('r0l', VSTATE); vlevel_r6(); a.rts()
+
     a.label('keys_rev_toggle'); a.mov_b_from_abs(KREV, 'r0l'); a.xor_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', KREV)
     a.label('keys_rev_apply')                  # read reference + direction for KREV (only while KEYS owns DSP1)
     a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('kra_out')
@@ -1007,10 +1163,10 @@ def build():
     a.label('keys_set_cut')                    # r0l = knob 0..127 (127 = filter off)
     a.push_l(4); a.mov_b_rr('r0l', 'r4l'); a.extu_w(4); a.extu_l(4)
     a.cmp_b_imm(127, 'r4l'); a.bne('ksc_on')
-    dsp_coef('flt_wet', 0); dsp_coef('flt_dry', 64); a.bra16('ksc_out')
+    dsp_coef('flt_wet', 0); dsp_coef('flt_dry', 0); a.bra16('ksc_out')            # off: voices dry (mixer adds VS*(dry-1))
     a.label('ksc_on')
     for nm, tb in (('flt_f1', 'f_hi'), ('flt_f1l', 'f_lo'), ('flt_f2', 'f_hi'), ('flt_f2l', 'f_lo')): dsp_coef_tab(nm, tb)
-    dsp_coef('flt_wet', 64); dsp_coef('flt_dry', 0)
+    dsp_coef('flt_wet', 64); dsp_coef('flt_dry', -64)                                 # on: filtered only
     a.label('ksc_out'); a.pop_l(4); a.rts()
     a.label('keys_set_res')
     a.push_l(4); a.mov_b_rr('r0l', 'r4l'); a.and_b_imm(0x7F, 'r4l'); a.extu_w(4); a.extu_l(4)
@@ -1090,6 +1246,7 @@ def build():
     k_since(KREC_T0); a.mov_l_from_abs(KREC_MS, 1); a.cmp_l_rr(1, 0); a.bcs16('ki_out')
     a.bsr16('keys_rec_stop'); set_byte(KSTATE, KS_PLAY)                              # pads + tracks keep playing:
     dsp_coef('age_e_g', 0); set_byte(KAEP, 1); a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, KAE_T)   # AGE_E := 0 (reverse)
+    a.bsr16('keys_loop_setup')
     dsp_coef('thru_l', THRU); dsp_coef('thru_r', THRU)                               # 4 disk voices + 8 KEYS voices
     a.label('ki_redraw')
     on_keys_page('ki_out')
@@ -1133,6 +1290,7 @@ def build():
         a.label(keep); a.mov_b_to_abs('r0l', VLVL + v); dsp_voice_level(v)
         a.label(nx)
     a.label('kv_att_out')
+    a.bsr16('keys_loop')
     for v in range(NV):                        # sample ran out: stop (past the end the delay RAM holds old takes)
         nx = uniq('ke')
         a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.bcs16(nx)       # 0 idle, 1 not started yet
@@ -1207,6 +1365,18 @@ def build():
     for _ in range(6): a.shlr_l2(0)                                                  # >> 12
     a.mov_l_from_abs(TICK_MS, 1); a.add_l_rr(1, 0); a.add_l_imm(3, 0)                # + now + start delay
     a.mov_b_rr('r6l', 'r1l'); a.extu_w(1); a.extu_l(1); a.shll_l2(1); a.add_l_imm(VEND, 1); a.mov_l_st(0, 1)
+    a.mov_b_rr('r6l', 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_rr(0, 6)            # er6 = voice (zero-extended)
+    st_b('r4l', VKEY); a.mov_b_imm(0, 'r0l'); st_b('r0l', VXF)
+    dsp_voice_coef('sel', 0)                                                         # starts at the take's start
+    a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VLX)                                         # no handoff (loop off)
+    a.mov_b_from_abs(KLOOP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('kn_noloop')
+    a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VEND)                                        # looping: never runs out
+    a.mov_b_rr('r4l', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0)
+    a.mov_l_imm('inv_ratio', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 1)                  # r1 = 4096 / ratio
+    a.mov_w_from_abs(LP_FIRST, 0); a.extu_l(0); a.mulxu_w(1, 0)
+    for _ in range(6): a.shlr_l2(0)
+    a.mov_l_from_abs(TICK_MS, 1); a.add_l_rr(1, 0); a.add_l_imm(3, 0); st_l(0, VLX)  # first handoff (crossfade start)
+    a.label('kn_noloop')
     set_byte(KDIRTY, 1)
     a.label('kn_out'); a.pop_l(6); a.pop_l(5); a.pop_l(4); a.pop_l(2); a.rts()
 
@@ -1217,8 +1387,12 @@ def build():
         nx, off, slow = uniq('nf'), uniq('nfo'), uniq('nfs')
         a.mov_b_from_abs(VPAD + v, 'r0l'); a.cmp_b_rr('r4l', 'r0l'); a.bne(nx)
         set_byte(VPAD + v, 0xFF)
+        cn = uniq('nfc')
         a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq(off); a.cmp_b_imm(4, 'r0l'); a.beq(off)
-        set_byte(VSTATE + v, 0); a.bra(nx)                                           # not started yet: cancel
+        a.cmp_b_imm(6, 'r0l'); a.beq(off); a.cmp_b_imm(7, 'r0l'); a.bne(cn)
+        a.mov_b_from_abs(VLINK + v, 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_imm(VXF, 0)   # its old voice: re-prepare
+        a.mov_b_imm(0, 'r1l'); a.mov_b_st('r1l', 0)
+        a.label(cn); set_byte(VSTATE + v, 0); a.bra16(nx)                            # not started yet: cancel
         a.label(off)                                                                 # release: ramp, or cut if REL = 0
         a.mov_b_from_abs(KREL, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm('rel_step', 1); a.add_l_rr(0, 1)
         a.mov_b_ld(1, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne(slow)
@@ -1236,7 +1410,8 @@ def build():
     for v in range(NV):
         nx = uniq('kp')
         hit = uniq('kph')
-        a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq(hit); a.cmp_b_imm(4, 'r0l'); a.bne(nx)
+        a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq(hit); a.cmp_b_imm(4, 'r0l'); a.beq(hit)
+        a.cmp_b_imm(6, 'r0l'); a.bne(nx)
         a.label(hit)
         a.mov_b_from_abs(VPAD + v, 'r0l'); a.cmp_b_rr('r4l', 'r0l'); a.beq16('kp_yes')
         a.label(nx)
@@ -2301,7 +2476,7 @@ def build():
     a.align2()
     a.label('ratio_tab')                                       # pad -> the 3 pitch coefficient values (e0 format)
     for c2, c1, c0 in RATIOS: a.raw(struct.pack('>HHH', c2 << 8, c1 << 8, c0 << 8))
-    for tab in ('t', 'g', 'd2', 'd1', 'd0'):                   # voice -> DSP word address of each field
+    for tab in ('t', 'g', 'd2', 'd1', 'd0', 'sel'):            # voice -> DSP word address of each field
         a.label('kt_' + tab); a.raw(struct.pack('>%dH' % NV, *[dsp_addr('v%d_%s' % (v, tab)) for v in range(NV)]))
     a.label('rel_ms'); a.raw(struct.pack('>%dH' % len(REL_MS), *REL_MS))
     a.label('inv_ratio'); a.raw(struct.pack('>%dH' % NKEYS, *INV_RATIO))
@@ -2387,7 +2562,7 @@ def main(raw, outdir):
         a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', MWR); a.mov_b_to_abs('r0l', MRD)
         a.mov_b_imm(KREL_DEFAULT, 'r0l'); a.mov_b_to_abs('r0l', KREL)
         a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', KACTIVE); a.mov_b_to_abs('r0l', KDIRTY)
-        for v_ in (KATT, KREV, KSCUR, KAEP, KGATE): a.mov_b_to_abs('r0l', v_)
+        for v_ in (KATT, KREV, KSCUR, KAEP, KGATE, KLOOP): a.mov_b_to_abs('r0l', v_)
     ablob, alabels = bootanim.patch(img, ANIM_BASE, ram_init)
     assert ANIM_BASE + len(ablob) < DSP_BASE
     p = SPLASH2_AT - 0x100000

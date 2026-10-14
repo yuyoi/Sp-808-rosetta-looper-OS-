@@ -210,9 +210,9 @@ def main(image_path, out):
     # ---- v1.6: knobs (filter, attack), EDIT page, reverse, Roland's DSP writes gated ----
     W = lambda n: (bm.dsp_addr(n) & 0xFFC) >> 2
     cf = lambda n: sim.prog[W(n)] & 0xFF
-    print('knobs at rest: wet %d dry %d (filter off), KATT %d, gate %d' % (cf('flt_wet'), cf('flt_dry'), e.rb(bm.KATT), e.rb(bm.KGATE)))
+    print('knobs at rest: wet %d dry %d (filter off: 0 0), KATT %d, gate %d' % (cf('flt_wet'), cf('flt_dry'), e.rb(bm.KATT), e.rb(bm.KGATE)))
     sim.knobs[6] = 80; sim.knobs[7] = 100; sim.run(30)
-    print('knob A 80, B 100: wet %d dry %d f %d/%d q %d/%d (cutoff %d Hz)' % (cf('flt_wet'), cf('flt_dry'), cf('flt_f1'), cf('flt_f1l'),
+    print('knob A 80, B 100: wet %d dry %d f %d/%d q %d/%d (cutoff %d Hz; on: 64 192)' % (cf('flt_wet'), cf('flt_dry'), cf('flt_f1'), cf('flt_f1l'),
           cf('flt_q'), cf('flt_ql'), bm.CUT_HZ[80]))
     sim.knobs[6] = 127; sim.run(30); print('knob A 127: wet %d dry %d' % (cf('flt_wet'), cf('flt_dry')))
     sim.knobs[8] = 8 * 9; sim.run(30)                         # attack index 9 = 200 ms
@@ -241,6 +241,21 @@ def main(image_path, out):
     shots.append(('EDIT reverse', sim.shot()))
     sim.pad(7); sim.run(60); print('pad on EDIT page plays KEYS: states', [e.rb(bm.VSTATE + v) for v in range(bm.NV)]); sim.pad(7, False); sim.run(300)
     sim.key(bm.K_ENTER); sim.run(20); print('REVERSE off: KREV %d v0_dir %d' % (e.rb(bm.KREV), sim.prog[W('v0_dir')] & 0xFF))
+    # LOOP: DOWN to the LOOP switch, ENTER; hold the root pad 3x the take, the sound must not stop
+    sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(20)
+    print('LOOP on: KLOOP %d  first %d ms, LL %d ms, XF %d ms, soff %d/%d/%d (take %d ms)' % (e.rb(bm.KLOOP), e.rw(bm.LP_FIRST),
+          e.rw(bm.LP_LL), e.rw(bm.LP_XF), cf('soff_a'), cf('soff_b'), cf('soff_c'), e.rl(bm.KREC_MS)))
+    shots.append(('S-EDIT loop', sim.shot()))
+    sim.out = []; sim.pad(7); pk, sts = [], []
+    for _ in range(15):
+        sim.run(100); ys = sim.out[-4000:]; pk.append('%.3f' % (max(abs(y) for y in ys) / 0x7FFFFF))
+        sts.append(''.join(str(e.rb(bm.VSTATE + v)) for v in range(bm.NV)))
+    print('hold 1.5 s, peak per 100 ms:', pk)
+    print('  voice states per 100 ms:', sts)
+    ys = sim.out[2000:]; print('  f over the hold %.0f Hz' % freq(ys)[0])
+    sim.pad(7, False); sim.run(700)
+    print('  after release:', [e.rb(bm.VSTATE + v) for v in range(bm.NV)], 'VXF', [e.rb(bm.VXF + v) for v in range(bm.NV)])
+    sim.key(bm.K_ENTER); sim.run(20); print('LOOP off: KLOOP', e.rb(bm.KLOOP))
     sim.key(bm.K_EXIT); sim.run(10); print('EXIT -> page', e.rb(bm.PAGE), 'active', e.rb(bm.KACTIVE), 'gate', e.rb(bm.KGATE), 'CUR', e.rb(bm.CUR))
     sim.key(bm.K_RIGHT); sim.run(5); shots.append(('home scrolled', sim.shot())); sim.key(bm.K_LEFT)
     sim.key(bm.K_LEFT); sim.key(bm.K_ENTER); sim.run(20)                     # back to KEYS

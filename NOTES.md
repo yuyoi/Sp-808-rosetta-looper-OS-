@@ -232,6 +232,23 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   - Assembler rejects duplicate labels (the knob routine's `kn_out` exit had silently jumped into the note-on
     routine's `kn_out`, popping 4 registers: a crash on hardware).
 
+### v1.7 (1170, 2026-10-14, emulator-tested, NOT on hw): LOOP (sustain while held)
+- S-EDIT row 3 = LOOP on/off (KLOOP). Region from the take length L: loop end LE = L - L/16, loop start LS = 3L/8,
+  crossfade XF = min(40 ms, (LE - LS)/2). Held notes play to LE, then cycle LS..LE; release ramps as before.
+- **Why not two read heads per voice:** READvar = `pos + (eramvar >> 12) + ((imm >> 1) & 1)` (+ the bit-8 hiflag):
+  only bit 1 of imm counts, so a second head at an arbitrary offset can't be read with the same eramvar.
+- **Voice handoff instead:** 3 ms before LE - XF a free voice is prepared as a continuation (state 7, `v_sel` on:
+  X gets `+ SOFF * sel`, SOFF = LS - XF in 16.8 from three coefficient fields soff_a/b/c at words 0x5A-0x5C, raw store
+  at 0x5F), same pitch, level 0. At LE - XF it starts (phase reset) and the host ramps the two levels across XF
+  (old voice state 5 fade-out, new state 6 fade-in), then the new voice is held (2) and links on again.
+  VKEY/VLINK/VXF/VXL0/VXD/VLX/VXS track it per voice. Note-off on a link: 2/4/6 release, 7 is cancelled.
+- Voice block back to 44 words (one head); SVF filter moved to word 0x60 (G1 + 16).
+- **Mixer change:** out = voices + thru + lp * wet + voices * (wet ? -1 : 0), i.e. `flt_dry` now means dry - 1.
+  keys_set_cut writes 0/0 (off) and 64/-64 (on). A stale 64 here doubled every level (0.187 instead of 0.094).
+- Model: 0.44 s take held 1.5 s -> constant peak 0.094 per 100 ms, f 1001 Hz across 4 handoffs, clean release,
+  no stuck links. Reverse + loop is coded (klp_rv) but not covered by the test.
+- Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
+
 ### Hardware results 2026-10-14 (v1.1 / v1.2) and v1.3
 - **KEYS works on the unit:** pitched across the pads, fast chords "sound great". Our own DSP1 program, on hw.
 - **mc3 does not exist as a general register on the FX core (DSP1).** Odd voices used mc3 for their level
