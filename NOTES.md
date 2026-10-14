@@ -249,6 +249,13 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.82 (1182, 2026-10-14): DDS-DSP labels, POLY on the 7-segment line
+- User: keep the mixer (every wave its own level) and the DDS-DSP name, clearer labels: PULSE -> SQUARE, PW -> WIDTH,
+  UNISON -> SAW2 (the page is a per-voice source mixer, not slots).
+- 7-segment line on the KEYS / S-EDIT / DDS-DSP pages while KEYS owns DSP1: " POLY n" = voices with VSTATE != 0
+  (playing, starting or releasing), live every idle pass, instead of the ROSETTA / VER / MB ticker (user: "POLY reads
+  well in numeric").
+
 ### v1.81 (1181, 2026-10-14): idle oscillators frozen, 7-seg R / M
 - **Confirmed on hw 2026-10-14:** "works now no back noise".
 - **Hw report on v1.8:** synth notes play with the right envelope, but a background drone of the same wave sounds

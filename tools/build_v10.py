@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1181, '1.81'              # 1.81 = idle oscillators frozen, 7-seg R / M (1.8: DDS-DSP; 1.72: PAD BANK, idle mute)
+VERSION, VER_TXT = 1182, '1.82'              # 1.82 = DDS-DSP labels SQUARE / WIDTH / SAW2 (1.81: idle oscs frozen, 7-seg R / M)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -909,9 +909,9 @@ def build():
         a.label(neg); a.mov_b_rr('r0l', 'r2h'); a.mov_b_imm(2, 'r0l'); a.sub_b_rr('r2h', 'r0l'); a.mov_b_imm(ord('-'), 'r2l')
         a.label(out); a.mov_b_st('r2l', 1); a.adds1(1)
         a.label(zero); a.add_b_imm(ord('0'), 'r0l'); a.mov_b_st('r0l', 1); a.adds1(1)
-    cells = [('SAMPLE ', lambda: dval(KMXS)), ('SAW ', lambda: dval(KMXSAW)), ('PULSE ', lambda: dval(KMXPUL)),
-             ('PW ', lambda: (row_num_word('pw_pct', KPW), row_put('%'))), ('TRI ', lambda: dval(KMXTRI)),
-             ('UNISON ', lambda: dval(KMXUNI)), ('DETUNE ', lambda: (row_num_word('det_ct', KDET), row_put('C'))),
+    cells = [('SAMPLE ', lambda: dval(KMXS)), ('SAW ', lambda: dval(KMXSAW)), ('SQUARE ', lambda: dval(KMXPUL)),
+             ('WIDTH ', lambda: (row_num_word('pw_pct', KPW), row_put('%'))), ('TRI ', lambda: dval(KMXTRI)),
+             ('SAW2 ', lambda: dval(KMXUNI)), ('DETUNE ', lambda: (row_num_word('det_ct', KDET), row_put('C'))),
              ('OCT ', doct)]
     for i, (lbl, val) in enumerate(cells):
         a.mov_l_imm(KROW, 1); row_put(lbl); val(); row_end(5 if i % 2 == 0 else 61, 9 + 6 * (i // 2))
@@ -2191,6 +2191,20 @@ def build():
     a.mov_b_from_abs(SEG_PG, 'r0l'); a.inc_b('r0l'); a.cmp_b_imm(3, 'r0l'); a.bcs('sg_pg'); a.mov_b_imm(0, 'r0l')
     a.label('sg_pg'); a.mov_b_to_abs('r0l', SEG_PG)
     a.label('sg_show')
+    a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('sg_tk')
+    a.mov_b_from_abs(PAGE, 'r0l')
+    a.cmp_b_imm(P_KEYS, 'r0l'); a.beq('sg_poly'); a.cmp_b_imm(P_KSET, 'r0l'); a.beq('sg_poly')
+    a.cmp_b_imm(P_DDS, 'r0l'); a.bne16('sg_tk')
+    a.label('sg_poly')                                          # KEYS pages: "POLY n" = voices sounding, live
+    a.mov_l_imm(SEGTXT, 1); puts_ram(' POLY ')
+    a.mov_b_imm(0, 'r0l')
+    for v in range(NV):
+        nx = uniq('sgv')
+        a.mov_b_from_abs(VSTATE + v, 'r2l'); a.cmp_b_imm(0, 'r2l'); a.beq(nx); a.inc_b('r0l')
+        a.label(nx)
+    a.extu_w(0); a.bsr16('fmt_u'); putc('\0')
+    a.mov_l_imm(SEGTXT, 4); a.bra16('sg_put')
+    a.label('sg_tk')
     a.mov_b_from_abs(SEG_PG, 'r0l')
     a.cmp_b_imm(0, 'r0l'); a.bne('sg_p1'); a.mov_l_imm('s_seg0', 4); a.bra('sg_put')
     a.label('sg_p1')

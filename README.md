@@ -46,8 +46,10 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
   - MIDI keyboard C2-C7 (C4 = pad 8), velocity, release on the dial, SHIFT+EXIT or PAD BANK = pick another sample.
   - **S-EDIT** page: resonant low-pass (knob A cutoff, B resonance), attack (knob C), release, reverse, loop
     (sustain while held, crossfaded voice handoff), THRU on/off.
+  - The 7-segment line shows **POLY n**, the voices sounding right now.
 - **DDS-DSP page (v1.8-v1.81, works on hardware):** every KEYS voice also runs its own oscillators in the DSP, mixed
-  with the sample: SAMPLE, SAW, PULSE + PW, TRI, UNISON (a second saw, DETUNE in 1/16 semitones), OCT. SAMPLE 0 =
+  with the sample, each with its own level: SAMPLE, SAW, SQUARE + WIDTH (pulse width), TRI, SAW2 (a second saw,
+  DETUNE in 1/16 semitones), OCT. SAMPLE 0 =
   pure synth, notes hold while the key is held. The oscillator is a raw 24-bit phase (DDS); pulse and triangle are
   shaped from it with saturation and abs, all in the same DSP instructions per voice.
 

@@ -122,6 +122,11 @@ def freq(ys):
 def main(image_path, out):
     sim = KeysSim(open(image_path, 'rb').read(), bm.build()[1])
     e, shots = sim.e, []
+    e.seg, e.segpos = {}, 0                                  # 7-segment line capture (v1.82: POLY n on the KEYS pages)
+    def seg_pos(x): x.segpos = x.g8(8)
+    def seg_put(x): x.seg[x.segpos] = x.g32(0); x.segpos += 1
+    e.stubs[bm.SEG_POS], e.stubs[bm.SEG_PUT] = seg_pos, seg_put
+    segline = lambda: ''.join(bm.seg_decode(e.seg.get(i, 0)) for i in range(bm.SEG_DIGITS))
     e.wb(bm.KTHRU, 1)                                        # as the boot RAM init (not run here) sets it
     for v_, val_ in ((bm.KMXS, 16), (bm.KPW, 8), (bm.KDET, 2), (bm.KOCT, 2)): e.wb(v_, val_)
     e.wb(bm.PAGE, bm.P_HOME); sim.call('menu', 0); sim.run(5)
@@ -161,8 +166,9 @@ def main(image_path, out):
         print('held %-4s 900 ms: voice stopped by itself after %s ms (sample 639 ms / ratio %.3f = %.0f ms)' % (
             name, None if end is None else round(end), 2 ** ((p - bm.KEYS_ROOT) / 12), 639 / 2 ** ((p - bm.KEYS_ROOT) / 12)))
     sim.pad(7); sim.pad(14); sim.run(40); shots.append(('2 notes', sim.shot())); sim.run(100)
-    sim.out = []; sim.run(100); f, pk = freq(sim.out); print('chord     peak %.3f' % pk)
+    sim.out = []; sim.run(100); f, pk = freq(sim.out); print('chord     peak %.3f  7-seg [%s] (expect POLY 2; 0 = O)' % (pk, segline()))
     sim.pad(7, False); sim.pad(14, False); sim.run(50)
+    sim.run(600); print('released  7-seg [%s] (expect POLY 0)' % segline())
     # MIDI keyboard through the stock parser's handler table: note 72 = +12, velocity, release ramp
     def midi(note, vel):
         e.wb(bm.MIDI_NOTE, note); e.wb(bm.MIDI_VEL, vel); sim.call('m_on_tr' if vel else 'm_off_tr', 0)
