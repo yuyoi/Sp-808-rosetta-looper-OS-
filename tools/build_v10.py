@@ -220,7 +220,7 @@ Changes:
 Earlier notes: build_v06g.py and the docstring chain before it.
 usage: python -I build_v08.py raw.bin outdir
 """
-import os, struct, sys
+import math, os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from h8asm import Asm
 from make_prg import check, SIZE, VER_HDR, VER_CODE
@@ -423,7 +423,8 @@ LKEYW, LABT = RAM_BASE + 0x428, RAM_BASE + 0x42C
 ADC_TAB, ADC_N, SWNAMES, SWCODES, SW_N = 0x426CBE, 14, 0x15F9E8, 0x16414C, 67
 LAB_CH_NAMES = ['FADER A', 'FADER B', 'FADER C', 'FADER D', 'FADER 5?', 'FADER 6?', 'PARA-A', 'PARA-B', 'PARA-C',
                 'BEAM L', 'BEAM R', 'FOOT SW', '', '']                    # (CONTROLS.md; 4/5/12/13 to confirm on hw)
-LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt'), ('LED SHOW', 'lab_ld'), ('LCD ICONS', 'lab_sg')]
+LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt'), ('LED SHOW', 'lab_ld'), ('LCD ICONS', 'lab_sg'),
+            ('PAD VU METER', 'lab_vu')]
 # LCD ICONS: the 7-segment line = 2 rows x 12 words in the boot ROM's LCD RAM (row 0 at 0x40187A, row 1 at 0x401892,
 # streamed by the LCD interrupt). 25 digits use 4-bit groups (type 0 bits 13-10, type 1 bits 9-8 + 5-4, type 2 bits
 # 3-0; boot ROM tables 0xA226 types / 0xA23F word offsets); the other 184 bits are never written by a digit: hidden
@@ -444,7 +445,8 @@ LED_CODES = [0xF4, 0x40, 0x41, 0x42, 0x43, 0x60, 0x62, 0x64, 0x66, 0x61, 0x63, 0
              0xD2, 0xC0, 0xC4, 0xC5, 0xC2, 0xC3, 0xC6, 0xC7, 0xC8, 0xC1, 0x1C, 0x1D, 0x1E, 0x1F, 0x20, 0x18, 0x19, 0x1A,
              0x1B, 0x21, 0x14, 0x15, 0x16, 0x17, 0x22, 0x10, 0x11, 0x12, 0x13]
 LEDIX, LEDON, LEDWAS, LEDAUTO, LEDT = RAM_BASE + 0x448, RAM_BASE + 0x449, RAM_BASE + 0x44A, RAM_BASE + 0x44B, RAM_BASE + 0x44C
-KPLED, KPSAVE, KPNEW = RAM_BASE + 0x450, RAM_BASE + 0x452, RAM_BASE + 0x454   # KEYS pad LEDs: shown, the stock's, wanted
+KPLED, KPSAVE, KPNEW = RAM_BASE + 0x450, RAM_BASE + 0x452, RAM_BASE + 0x454   # pad LEDs: shown, the stock's, wanted
+VULIT, VUT = RAM_BASE + 0x45B, RAM_BASE + 0x490                                # LAB PAD VU: pads taken, last frame
 # MFX (v1.91, interface + hooks; the sound blocks come later): our DSP1 program (mfxdsp.py) serves DSP0's three FX
 # insert slots (mixer group 7 index 0/1/2). Slot 1 goes through the stock FX LOCATION (so the EFFECTS button and the
 # OS's own re-apply on pad playback agree with it), slots 2/3 are written straight (the OS never touches them).
@@ -1280,9 +1282,7 @@ def build():
     set_byte(KLOADED, 0); set_byte(KSTATE, KS_IDLE)                                  # then our program + sample are gone
     a.label('ke_ours')
     set_byte(KACTIVE, 1)
-    a.mov_w_from_abs(LED_ROWS + 2, 0); a.mov_w_to_abs(0, KPSAVE)                   # pad LEDs: the stock's state kept,
-    for p_ in range(16): a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_OFF)                 # then they show the held keys
-    a.mov_w_imm(0, 0); a.mov_w_to_abs(0, KPLED)
+    a.bsr16('vu_release'); a.bsr16('pads_take')                                      # pad LEDs show the held keys
     a.mov_b_from_abs(KLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('ke_loaded')
     a.bsr16('keys_load')
     a.label('ke_loaded')
@@ -1343,12 +1343,7 @@ def build():
 
     a.label('keys_exit')                       # leaving the page: voices off, recording off, routing back
     a.bclr_abs(0, KGATE); set_byte(KACTIVE, 0); set_byte(KBSEL, 0)
-    for p_ in range(16):                                                             # the stock's pad LEDs back
-        on_, nx_ = uniq('kxo'), uniq('kxn')
-        a.mov_w_from_abs(KPSAVE, 0); a.mov_w_from_abs(LED_MASKS + 2 * p_, 1); a.and_w_rr(1, 0); a.bne(on_)
-        a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_OFF); a.bra(nx_)
-        a.label(on_); a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_ON)
-        a.label(nx_)
+    a.bsr16('pads_give')                                                             # the stock's pad LEDs back
     voices_silent()
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.beq('kx_r'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.beq('kx_r')
     a.bsr16('keys_rec_stop'); set_byte(KSTATE, KS_IDLE)
@@ -1643,7 +1638,9 @@ def build():
         a.add_b_imm(0x100 - (KEY_LO - KEYS_ROOT), 'r0l'); a.cmp_b_imm(16, 'r0l'); a.bcc(nx)
         a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0); a.mov_l_imm('bit16', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 0); a.or_w_rr(0, 2)
         a.label(nx)
-    a.mov_w_to_abs(2, KPNEW); a.mov_w_from_abs(KPLED, 0); a.cmp_w_rr(2, 0); a.beq16('kpl_x')
+    a.mov_w_to_abs(2, KPNEW)
+    a.label('pads_apply')                                       # pad LEDs := KPNEW (only the changed ones are written)
+    a.mov_w_from_abs(KPNEW, 2); a.mov_w_from_abs(KPLED, 0); a.cmp_w_rr(2, 0); a.beq16('kpl_x')
     for p_ in range(16):
         nx, off = uniq('kpp'), uniq('kpf')
         a.mov_w_from_abs(KPNEW, 0); a.mov_w_from_abs(KPLED, 1); a.xor_w_rr(0, 1)
@@ -1658,6 +1655,18 @@ def build():
         a.label(nx)
     a.mov_w_from_abs(KPNEW, 0); a.mov_w_to_abs(0, KPLED)
     a.label('kpl_x'); a.rts()
+    a.label('pads_take')                                        # keep the stock's pad LEDs, then all off (ours now)
+    a.mov_w_from_abs(LED_ROWS + 2, 0); a.mov_w_to_abs(0, KPSAVE)
+    for p_ in range(16): a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_OFF)
+    a.mov_w_imm(0, 0); a.mov_w_to_abs(0, KPLED); a.rts()
+    a.label('pads_give')                                        # the stock's pad LEDs back
+    for p_ in range(16):
+        on_, nx_ = uniq('kxo'), uniq('kxn')
+        a.mov_w_from_abs(KPSAVE, 0); a.mov_w_from_abs(LED_MASKS + 2 * p_, 1); a.and_w_rr(1, 0); a.bne(on_)
+        a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_OFF); a.bra(nx_)
+        a.label(on_); a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_ON)
+        a.label(nx_)
+    a.rts()
     a.label('keys_idle')                       # every main-loop pass while on screen 5
     a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('ki_nokn')
     a.bsr16('keys_knobs')
@@ -2716,6 +2725,29 @@ def build():
     a.label('sgk_u'); a.cmp_w_imm(K_UP, 5); a.bne('sgk_d'); set_byte(SGMODE, 1); a.jmp('redraw')
     a.label('sgk_d'); a.cmp_w_imm(K_DOWN, 5); a.bne('sgk_x'); set_byte(SGMODE, 0); a.jmp('redraw')
     a.label('sgk_x'); a.jmp('done')
+    # ---- LAB: PAD VU METER = the input meter on the pad LEDs (1-8 left, 9-16 right, level / 16 each) ----
+    a.label('vu_frame')                                         # pads from LVL_L / LVL_R
+    a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('vur_x')           # KEYS owns the pads
+    a.mov_b_from_abs(VULIT, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('vuf_t'); a.bsr16('pads_take'); set_byte(VULIT, 1)
+    a.label('vuf_t')
+    a.mov_b_from_abs(LVL_L, 'r0l'); a.and_b_imm(0x7F, 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm('vu_map', 1); a.add_l_rr(0, 1); a.mov_b_ld(1, 'r2l')        # pads 1-8
+    a.mov_b_from_abs(LVL_R, 'r0l'); a.and_b_imm(0x7F, 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm('vu_map', 1); a.add_l_rr(0, 1); a.mov_b_ld(1, 'r2h')        # pads 9-16
+    a.mov_w_to_abs(2, KPNEW); a.bra16('pads_apply')
+    a.label('vu_release')                                       # leaving: the stock's pads back
+    a.mov_b_from_abs(VULIT, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('vur_x')
+    set_byte(VULIT, 0); a.bra16('pads_give')
+    a.label('vur_x'); a.rts()
+    a.label('lab_vu_d')
+    a.mov_l_imm(KROW, 1); row_put('INPUT  L ')
+    a.mov_b_from_abs(LVL_L, 'r0l'); a.and_b_imm(0x7F, 'r0l'); a.extu_w(0); a.bsr16('fmt_u'); row_put('   R ')
+    a.mov_b_from_abs(LVL_R, 'r0l'); a.and_b_imm(0x7F, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
+    a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+    D.text(4, 12, KROW, 'font_tiny')
+    D.text(4, 19, 's_vuhelp1', 'font_tiny'); D.text(4, 25, 's_vuhelp2', 'font_tiny')
+    a.rts()
+    a.label('lab_vu_k'); a.jmp('done')
     a.label('lab_idle')                                         # ANALOG INPUTS shown: redraw every 40 ms
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LAB, 'r0l'); a.bne('lbi_off')
     a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_off')
@@ -2725,14 +2757,22 @@ def build():
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LEDT, 1); a.sub_l(1, 0); a.cmp_l_imm(90, 0); a.bcs16('lbi_x')
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LEDT)
     a.mov_b_imm(1, 'r1l'); a.bsr16('led_step'); a.bra16('draw')
-    a.label('lbi_off'); a.bsr16('seg_restore'); a.bra16('led_restore')   # off the tabs: LED and 7-seg line back
+    a.label('lbi_off'); a.bsr16('seg_restore'); a.bsr16('vu_release'); a.bra16('led_restore')   # off: all back
     a.label('lbi_nl'); a.bsr16('led_restore')
-    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(3, 'r0l'); a.beq16('lbi_x'); a.bsr16('seg_restore')
+    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(3, 'r0l'); a.beq16('lbi_x'); a.bsr16('seg_restore')   # off ICONS
+    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(4, 'r0l'); a.beq16('lbi_vu'); a.bsr16('vu_release')  # off PAD VU
     a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('lbi_x')
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LABT, 1); a.sub_l(1, 0); a.cmp_l_imm(40, 0); a.bcs16('lbi_x')
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LABT)
     a.bra16('draw')
     a.label('lbi_x'); a.rts()
+    a.label('lbi_vu')                                           # PAD VU: pads every 30 ms, the numbers every 150 ms
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(VUT, 1); a.sub_l(1, 0); a.cmp_l_imm(30, 0); a.bcs('lbi_vx')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, VUT)
+    a.bsr16('vu_frame')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LABT, 1); a.sub_l(1, 0); a.cmp_l_imm(150, 0); a.bcs('lbi_vx')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LABT); a.bra16('draw')
+    a.label('lbi_vx'); a.rts()
     a.label('row_str')                                          # copy the string at er2 to er1 (er1 ends at its end)
     a.mov_b_ldinc(2, 'r0l'); a.beq('rs_e'); a.mov_b_st('r0l', 1); a.adds1(1); a.bra('row_str')
     a.label('rs_e'); a.rts()
@@ -3389,6 +3429,9 @@ def build():
     for i in range(len(MF_TGTS)): a.dc_l('s_mfg%d' % i)
     a.label('mf_c2i'); a.raw(bytes(MF_C2I)); a.align2()
     a.label('led_codes'); a.raw(bytes(LED_CODES)); a.align2()
+    a.label('vu_map')                                           # level 0..127 -> lit pads (4.5 dB each) as bits
+    a.raw(bytes(0 if v == 0 else (1 << max(0, min(8, round(8 + 20 * math.log10(v / 127) / 4.5)))) - 1 for v in range(128)))
+    a.align2()
     a.label('sg_bits')                                          # per free bit: LCD RAM word address, bit mask
     for row, w, b in SEG_FREEBITS: a.raw(struct.pack('>IH', (SEG_ROW0 if row == 0 else SEG_ROW1) + 2 * w, 1 << b))
     a.label('sg_info')                                          # per free bit: row * 16 + word, bit, 0
@@ -3421,7 +3464,7 @@ def build():
                    ('s_armed', 'HIT A PAD'), ('s_cancel', 'EXIT=CANCEL'),
                    ('s_looper', 'LOOPER'), ('s_keys', 'KEYBOARD'),
                    ('s_soon', 'COMING SOON'), ('s_exithelp', 'EXIT=HOME'),
-                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), *MAC_STRS, ('s_lbhelp', 'PRESS ANY BUTTON  EXIT=HOME'), ('s_ledhelp', '</>=STEP  UP=CHASE  DOWN=STOP'), ('s_ledchase', 'CHASE...'), ('s_sghelp1', '</>=NEXT BIT  UP=ALL  DOWN=ONE'), ('s_sghelp2', 'WATCH THE 7-SEGMENT LINE'), ('s_ksamp', 'SAMPLING...'),
+                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), *MAC_STRS, ('s_lbhelp', 'PRESS ANY BUTTON  EXIT=HOME'), ('s_ledhelp', '</>=STEP  UP=CHASE  DOWN=STOP'), ('s_ledchase', 'CHASE...'), ('s_sghelp1', '</>=NEXT BIT  UP=ALL  DOWN=ONE'), ('s_sghelp2', 'WATCH THE 7-SEGMENT LINE'), ('s_vuhelp1', 'PADS 1-8 = LEFT  9-16 = RIGHT'), ('s_vuhelp2', 'THE INPUT METER ON THE PADS'), ('s_ksamp', 'SAMPLING...'),
                    ('s_kwait', 'EXIT=CANCEL'), ('s_kplay', 'PLAY SRC'), ('s_kphelp', 'SHIFT+EXIT=PICK  UP/DN'), ('s_krel', 'REL')):
         a.label(lbl); a.string(s)
     return a.assemble(), a.labels
@@ -3490,7 +3533,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0),
                          (MSLOT, 12), (MSLOT + 1, 0), (MSLOT + 2, 0), (MLVL, 64), (MLVL + 1, 64), (MLVL + 2, 64),
                          *((MCTRL + i, 0) for i in range(6)), *((MCLAST + i, 0xFF) for i in range(6))):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)

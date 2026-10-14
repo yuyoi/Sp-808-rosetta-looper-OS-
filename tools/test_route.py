@@ -123,8 +123,20 @@ def main(image_path, out):
     n_on = sum(bin(x ^ y).count('1') for x, y in zip(seg0, line()))
     print('UP = ALL   bits changed', n_on, '(of %d free; the 0x1234 digits had none of them)' % len(bm.SEG_FREEBITS))
     shots.append(('LCD ICONS: all', sim.shot()))
+    # ---- LAB: PAD VU METER (input level on the pad LEDs) ----
+    prow = bm.LED_ROWS + 2
+    def pads_lit(): return [p + 1 for p in range(16) if e.rw(prow) & e.rw(bm.LED_MASKS + 2 * p)]
+    for p in (2, 5): e.ww(prow, e.rw(prow) | e.rw(bm.LED_MASKS + 2 * p))   # the stock had pads 3 and 6 lit
+    pstock = e.rw(prow)
+    sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(10)
+    print('PAD VU     tab', e.rb(bm.LTAB), '7-seg line restored on leaving ICONS:', line() == seg0)
+    for l, r in ((127, 64), (40, 0), (0, 100)):
+        e.wb(bm.LVL_L, l); e.wb(bm.LVL_R, r); sim.run(40)
+        print('  L %3d R %3d -> pads lit %s' % (l, r, pads_lit()))
+    shots.append(('PAD VU', sim.shot()))
     sim.key(bm.K_EXIT); sim.run(20)
-    print('EXIT       7-seg line restored:', line() == seg0, 'SGLIT', e.rb(bm.SGLIT))
+    print('EXIT       pads back to the stock [3, 6]:', pads_lit(), e.rw(prow) == pstock)
+    before[1] = pstock                                       # (the test lit stock pads 3 / 6 in between)
     after = [e.rw(bm.LED_ROWS + 2 * r) for r in range(16)]
     print('EXIT       page', e.rb(bm.PAGE), 'LED rows restored:', before == after, 'lit', e.rb(bm.LEDON))
     print(ui_gfx.render(shots, out))

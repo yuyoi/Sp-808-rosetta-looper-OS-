@@ -269,6 +269,8 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   each LED's own state is put back when it is left (and on leaving the tab / page).
   LCD ICONS = the 7-segment line's 184 bits that no digit uses, one at a time (</>, with row / word / bit) or all at
   once (UP): if the glass has hidden icons they light up; the line is put back on leaving.
+  PAD VU METER = the input meter (LVL_L / LVL_R 0x427838 / 0x42783E) on the pad LEDs, pads 1-8 left, 9-16 right,
+  4.5 dB per pad; the stock pad LEDs are kept and put back (shared with KEYS: pads_take / pads_give).
 - **KEYS: sample + oscillators**: with SAMPLE and any oscillator on (LA off, loop off) a held note no longer stops at
   the sample end: the sample is cut there (the LA cut, VLAT = VSEND) and the oscillators hold the note. (Found by the
   suite: ENV DECAY/SUSTAIN with SAW + SAMPLE ended at the 439 ms take.)
