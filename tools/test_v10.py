@@ -28,6 +28,9 @@ class KeysSim(test_v09.Sim):
         self.dsp_log = []; self.pad_playing = None; self.pad_t = 0.0; self.routing = []
         self.out = []
         s[bm.DSP_LOAD] = self.dsp_load; s[bm.DSP_COEF] = self.dsp_coef; s[bm.DSP_ERAM] = self.dsp_eram
+        s[labels['own_load']] = self.dsp_load; s[labels['own_coef']] = self.dsp_coef; s[labels['own_eram']] = self.dsp_eram
+        self.knobs = {6: 127, 7: 0, 8: 0}                   # PARA-A fully open (filter off), B and C at 0
+        s[bm.KNOB_READ] = lambda e: e.s16(0, self.knobs.get(e.g16(0), 0))
         s[bm.MIXER_PARAM] = lambda e: self.routing.append((round(self.t, 1), e.g16(0), e.g16(8), e.g16(1)))
         s[bm.PAD_NOTE_ON] = self.note_on_stub; s[bm.STOP_PAD] = self.stop_stub
         def stock_pad(e):                                    # stock pad handler: a press plays the pad
@@ -204,6 +207,43 @@ def main(image_path, out):
     sim.out = []; sim.pad(7); sim.run(200); ys = list(sim.out)
     f, pk = freq(ys); sim.pad(7, False); sim.run(30)
     print('new sample on the keys: f = %.1f Hz peak %.3f' % (f, pk))
+    # ---- v1.6: knobs (filter, attack), EDIT page, reverse, Roland's DSP writes gated ----
+    W = lambda n: (bm.dsp_addr(n) & 0xFFC) >> 2
+    cf = lambda n: sim.prog[W(n)] & 0xFF
+    print('knobs at rest: wet %d dry %d (filter off), KATT %d, gate %d' % (cf('flt_wet'), cf('flt_dry'), e.rb(bm.KATT), e.rb(bm.KGATE)))
+    sim.knobs[6] = 80; sim.knobs[7] = 100; sim.run(30)
+    print('knob A 80, B 100: wet %d dry %d f %d/%d q %d/%d (cutoff %d Hz)' % (cf('flt_wet'), cf('flt_dry'), cf('flt_f1'), cf('flt_f1l'),
+          cf('flt_q'), cf('flt_ql'), bm.CUT_HZ[80]))
+    sim.knobs[6] = 127; sim.run(30); print('knob A 127: wet %d dry %d' % (cf('flt_wet'), cf('flt_dry')))
+    sim.knobs[8] = 8 * 9; sim.run(30)                         # attack index 9 = 200 ms
+    print('knob C %d -> KATT %d (%d ms)' % (sim.knobs[8], e.rb(bm.KATT), bm.ATT_MS[e.rb(bm.KATT)]))
+    e.wb(bm.KREL, 3); sim.run(300)                            # let the earlier notes finish first
+    sim.out = []; sim.pad(7); pk = []
+    for _ in range(6):
+        sim.run(50); pk.append('%.3f' % (max(abs(y) for y in sim.out[-2000:]) / 0x7FFFFF))
+    st = [e.rb(bm.VSTATE + v) for v in range(bm.NV)]
+    sim.pad(7, False); sim.run(400)
+    print('attack 200 ms: peak per 50 ms', pk, 'states after 300 ms', st)
+    sim.knobs[8] = 0; sim.run(30)
+    # gate: Roland's coefficient write into DSP1 while KEYS owns it is dropped (returns without writing)
+    n0 = len(sim.dsp_log); e.s16(0, 0x1000 | (W('flt_wet') << 2)); e.s16(8, 0x7F00)
+    sim.call('gate_coef'); print('gate: Roland write while KEYS active -> %d writes' % (len(sim.dsp_log) - n0))
+    # EDIT tile: home, cursor to EDIT, ENTER
+    sim.key(bm.K_EXIT); sim.run(10)
+    for _ in range(4): sim.key(bm.K_LEFT)
+    for _ in range(3): sim.key(bm.K_RIGHT)
+    sim.key(bm.K_ENTER); sim.run(20)
+    print('EDIT tile -> page', e.rb(bm.PAGE), 'active', e.rb(bm.KACTIVE), 'state', sim.kstate())
+    shots.append(('EDIT page', sim.shot()))
+    sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(20)
+    print('REVERSE on: KREV %d ref_f %d ref_r %d v0_dir %d v7_dir %d' % (e.rb(bm.KREV), cf('ref_f'), cf('ref_r'),
+          sim.prog[W('v0_dir')] & 0xFF, sim.prog[W('v7_dir')] & 0xFF))
+    shots.append(('EDIT reverse', sim.shot()))
+    sim.pad(7); sim.run(60); print('pad on EDIT page plays KEYS: states', [e.rb(bm.VSTATE + v) for v in range(bm.NV)]); sim.pad(7, False); sim.run(300)
+    sim.key(bm.K_ENTER); sim.run(20); print('REVERSE off: KREV %d v0_dir %d' % (e.rb(bm.KREV), sim.prog[W('v0_dir')] & 0xFF))
+    sim.key(bm.K_EXIT); sim.run(10); print('EXIT -> page', e.rb(bm.PAGE), 'active', e.rb(bm.KACTIVE), 'gate', e.rb(bm.KGATE), 'CUR', e.rb(bm.CUR))
+    sim.key(bm.K_RIGHT); sim.run(5); shots.append(('home scrolled', sim.shot())); sim.key(bm.K_LEFT)
+    sim.key(bm.K_LEFT); sim.key(bm.K_ENTER); sim.run(20)                     # back to KEYS
     # leaving KEYS without EXIT (mode keys): the master routing must come back, KEYS re-arms on return
     sim.key(bm.K_SAMPLE); sim.run(10)
     print('SAMPLE -> page', e.rb(bm.PAGE), 'route code %02X' % e.rb(bm.FX_ROUTE_CODE), 'active', e.rb(bm.KACTIVE), 'state', sim.kstate())

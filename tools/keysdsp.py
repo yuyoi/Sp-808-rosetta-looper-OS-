@@ -23,6 +23,9 @@ NVOICES = 8
 G0, V0, VSTRIDE = 0x3C, 0x100, 44
 # IRAM slots (relative addresses; a state value written at m is read next sample at m + 1 -> pairs)
 AGE, REC, PK, T1 = 0x20, 0x22, 0x24, 0x26
+AGE_E, REF = 0x28, 0x2A                                 # age since the take's END (reverse); the voices' read reference
+VS, LP, BP, HP = 0x90, 0x92, 0x94, 0x96                 # voice sum (filter input), state-variable filter lp / bp / hp
+G1 = 0x50                                               # second global block: AGE_E, REF, the filter (before the voices)
 def vslot(v, k): return 0x30 + 12 * v + 2 * k          # per voice: PHI, LVL, NX, SMP, OUT (+1 spare pair)
 PHI, LVL, NX, SMP, OUT = 0, 1, 2, 3, 4
 
@@ -63,6 +66,31 @@ def build(nvoices=NVOICES):
     put(g + 13, E(0x04, PK, SH3, 127))                         # A = pk * 15.9
     put(g + 16, E(0x08, T1, SH3, 127) | (0x02 << 23))          # i[T1] = sat(A(+13)); A = sat * 15.9; imm word 4 = 2
     put(g + 19, E(0x34, 0xCA, SH7, 0))                         # hostreg = sat(A(+16))   (all ones when sound)
+    # ---- AGE_E: age since the end of the take (host resets it there); REF = AGE (forward) or AGE_E (reverse) ----
+    g = G1
+    put(g + 0, E(0x04, AGE_E + 1, SH6, 64), 'age_e_g')        # A = age_e_old * 1   (0 = reset)
+    put(g + 1, E(0x00, 2, SH7, 32))                            # A += 256
+    put(g + 4, E(0x40, AGE_E, SH7, 0))                         # i[AGE_E] = raw(A(+1))
+    put(g + 5, E(0x04, AGE, SH6, 64), 'ref_f')                 # A = AGE * f
+    put(g + 6, E(0x00, AGE_E, SH6, 0), 'ref_r')                # A += AGE_E * r
+    put(g + 9, E(0x40, REF, SH7, 0))                           # i[REF] = raw(A(+6))
+    # ---- state-variable low-pass on the previous sample's voice sum (Chamberlin), 15-bit coefficients ----
+    #   lp' = lp + f*bp ; hp = x - lp' - q*bp ; bp' = bp + f*hp      (f: SH7 + lo7, q: SH6 + lo7, q_hi negative)
+    f = g + 10
+    put(f + 0, E(0x04, LP + 1, SH6, 64))                       # A = lp
+    put(f + 1, E(0x00, BP + 1, SH7, 0), 'flt_f1')              # A += bp * f_hi
+    put(f + 2, E(0x34, 0xC6, SH7, 0), 'flt_f1l')               # A += bp * f_lo / 128           -> lp'
+    put(f + 3, E(0x14, VS + 1, SH6, 64))                       # B = x
+    put(f + 4, E(0x10, BP + 1, SH6, 0), 'flt_q')               # B += bp * q_hi   (q_hi <= 0)
+    put(f + 5, E(0x34, 0xE6, SH6, 0), 'flt_ql')                # B += bp * q_lo / 128
+    put(f + 6, E(0x58, LP, SH7, 0))                            # i[LP] = sat(A(+3)) = lp'
+    put(f + 7, E(0x10, LP, SH6, -64 & 0xFF))                   # B -= lp'                        -> hp
+    put(f + 10, E(0x5C, HP, SH7, 0))                           # i[HP] = sat(B(+7))
+    put(f + 11, E(0x04, BP + 1, SH6, 64))                      # A = bp
+    put(f + 12, E(0x00, HP, SH7, 0), 'flt_f2')                 # A += hp * f_hi
+    put(f + 13, E(0x34, 0xC6, SH7, 0), 'flt_f2l')              # A += hp * f_lo / 128           -> bp'
+    put(f + 16, E(0x58, BP, SH7, 0))                           # i[BP] = sat(A(+13))
+    assert f + 16 < 0xF1
     # ---- voices ----
     outs = []
     for v in range(nvoices):
@@ -79,8 +107,8 @@ def build(nvoices=NVOICES):
         put(b + 5, E(0x10, 2, SH7, 0), 'v%d_d1' % v)            # B += c1 * 8
         put(b + 6, E(0x10, 1, SH7, 0), 'v%d_d0' % v)            # B += c0 / 8 (c0 multiple of 8)  -> PHI_new
         put(b + 7, E(0x34, 0xA0 | (mck << 1), SH7, 0))          # mc[k] = sat(A(+4)) = L_new
-        put(b + 9, E(0x0C, phi, SH6, 64))                       # i[PHI] = sat(B(+6)) = PHI_new; A = PHI_new
-        put(b + 10, E(0x00, AGE, SH6, -64 & 0xFF))              # A += age_new * -1  -> A = PHI - AGE = -X
+        put(b + 9, E(0x0C, phi, SH6, 64), 'v%d_dir' % v)        # i[PHI] = sat(B(+6)); A = +PHI (fwd) / -PHI (rev)
+        put(b + 10, E(0x00, REF, SH6, -64 & 0xFF))              # A -= REF -> -X (fwd: PHI - AGE, rev: -PHI - AGE_E)
         put(b + 13, E(0x44, nx, SH3, -128 & 0xFF))              # i[NX] = raw(A(+10)) = -X; A = -X * -16 = 16 X
         put(b + 16, E(0x34, 0xC7, SH7, 0) | (0x18 << 23), 'v%d_rdA' % v, 'eram')   # eramvar = A(+13); READvar (+0)
         put(b + 22, 0x18 << 23, 'v%d_rdB' % v, 'eram')          # READvar start #2, imm 2 (+1 sample)
@@ -101,16 +129,34 @@ def build(nvoices=NVOICES):
     for k, out in enumerate(outs):
         put(m + k, E(0x04 if k == 0 else 0x00, out, SH6, 64))
     n = len(outs)
-    put(m + n, E(0x00, 0x12, SH6, 0), 'thru_l')                 # A += inL * thru
-    put(m + n + 1, E(0x00, 0x18, SH6, 0), 'thru_r')             # A += inR * thru
-    put(m + n + 4, E(0x58, 0x13, SH7, 0))                       # i[13] = sat(A(+n+1))
-    put(m + n + 5, E(0x58, 0x19, SH7, 0))                       # i[19] = same (A unchanged, coef 0)
-    end = m + n + 6
+    put(m + n + 2, E(0x58, VS, SH7, 0))                         # i[VS] = sat(A(+n-1)) = voice sum
+    put(m + n + 3, E(0x04, LP, SH6, 0), 'flt_wet')              # A = lp' * wet       (filter on: 64)
+    put(m + n + 4, E(0x00, VS, SH6, 64), 'flt_dry')             # A += voices * dry   (filter off: 64)
+    put(m + n + 5, E(0x00, 0x12, SH6, 0), 'thru_l')             # A += inL * thru
+    put(m + n + 6, E(0x00, 0x18, SH6, 0), 'thru_r')             # A += inR * thru
+    put(m + n + 9, E(0x58, 0x13, SH7, 0))                       # i[13] = sat(A(+n+6))
+    put(m + n + 10, E(0x58, 0x19, SH7, 0))                      # i[19] = same
+    end = m + n + 11
     assert end <= 0x2F2 and all(w == 0 for w in prog[0xF1:0x100]), 'program layout'
     return prog, params
 
 
 def shsel(prog, params, name): return (prog[params[name][1]] >> 8) & 3
+
+
+FS = 44100
+CUT_LO, CUT_HI = 30.0, 7000.0                             # knob 0..126 -> cutoff (exponential); 127 = filter off
+def cutoff_hz(k): return CUT_LO * (CUT_HI / CUT_LO) ** (k / 126.0)
+def filt_f(k):
+    import math
+    f = 2 * math.sin(math.pi * cutoff_hz(k) / FS)          # Chamberlin f, SH7: value = (hi + lo/128) / 128
+    v = max(1, min(127 * 128 + 127, round(f * 128 * 128)))
+    return v >> 7, v & 0x7F
+def filt_q(k):
+    q = 1.4 - (1.4 - 0.07) * (k / 127.0)                   # knob 0 = no resonance (q 1.4), 127 = screaming (q 0.07)
+    v = round(-q * 64 * 128)                               # SH6: value = (hi + lo/128) / 64, negative
+    hi = -((-v + 127) >> 7); lo = v - hi * 128             # hi <= 0, 0 <= lo < 128
+    return hi & 0xFF, lo
 
 
 def coef_value(prog, params, name, c):

@@ -23,7 +23,10 @@ class Asm:
     # --- plumbing ---
     def _b(self, *bs): self.items.append(('b', bytes(bs)))
     def raw(self, data): self.items.append(('b', bytes(data)))
-    def label(self, name): self.items.append(('L', name))
+    def label(self, name):
+        if not hasattr(self, '_names'): self._names = set()
+        assert name not in self._names, 'duplicate label %s' % name
+        self._names.add(name); self.items.append(('L', name))
     def here_len(self):
         return sum(len(p) if k == 'b' else (4 if k in ('br16', 'abs32') else 2 if k == 'br8' else 0)
                    for k, p in self.items)
@@ -74,7 +77,9 @@ class Asm:
     def adds4(self, n): self._b(0x0B, 0x90 | n)                                         # adds #4,ern (n=7: sp)
     def dec_w1(self, n): self._b(0x1B, 0x50 | n)                                        # dec.w #1,rn
     def jsr_ind(self, n): self._b(0x5D, n << 4)                                         # jsr @ern
-    def jsr(self, addr): self._b(0x5E, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF)
+    def jsr(self, addr):
+        if isinstance(addr, str): self._b(0x5E); self.items.append(('abs24', addr))
+        else: self._b(0x5E, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF)
     # --- byte ALU, shifts, indirect access (graphics engine) ---
     def add_b_rr(self, src, dst): self._b(0x08, (R8[src] << 4) | R8[dst])
     def sub_b_rr(self, src, dst): self._b(0x18, (R8[src] << 4) | R8[dst])
@@ -124,7 +129,9 @@ class Asm:
     def cmp_l_rr(self, src, dst): self._b(0x1F, 0x80 | (src << 4) | dst)
     def mov_w_ld(self, ptr, n): self._b(0x69, (ptr << 4) | n)                          # mov.w @erp,rn
     def mov_w_st(self, n, ptr): self._b(0x69, 0x80 | (ptr << 4) | n)                   # mov.w rn,@erp
-    def jmp(self, addr): self._b(0x5A, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF)
+    def jmp(self, addr):
+        if isinstance(addr, str): self._b(0x5A); self.items.append(('abs24', addr))
+        else: self._b(0x5A, (addr >> 16) & 0xFF, (addr >> 8) & 0xFF, addr & 0xFF)
 
     def __getattr__(self, name):
         # bne('lbl') = 8-bit branch, bne16('lbl') = 16-bit branch
@@ -141,6 +148,7 @@ class Asm:
             elif k == 'b': pc += len(p)
             elif k == 'br8': pc += 2
             elif k in ('br16', 'abs32'): pc += 4
+            elif k == 'abs24': pc += 3
         out = bytearray(); pc = self.base
         for k, p in self.items:              # pass 2: emit
             if k == 'b': out += p; pc += len(p)
@@ -154,4 +162,6 @@ class Asm:
                 out += (bytes((0x5C, 0x00)) if c is None else bytes((0x58, c << 4))) + struct.pack('>h', d); pc += 4
             elif k == 'abs32':
                 out += struct.pack('>I', self.labels[p]); pc += 4
+            elif k == 'abs24':
+                out += self.labels[p].to_bytes(3, 'big'); pc += 3
         return bytes(out)

@@ -201,6 +201,31 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   so the onset latency stays one main-loop pass). On the first hardware test read it off the screen: R must be 0C
   on the page (01 after EXIT), the readback should move with the pads' audio (0F low nibbles = sound).
 
+### v1.4-v1.6 (2026-10-14)
+- **v1.4 (1140):** KEYS releases DSP1 + the master routing on every way out (keys_guard each idle pass: active <=>
+  page KEYS or EDIT; screen-5 leave event 1); re-entry reloads our program when FX_CUR != 0xFFFF (stock FX loaded).
+- **v1.5 (1150):** dry master through DSP1 at unity (THRU 64) = 4 disk voices + 8 KEYS voices together; one-shot
+  notes stop at the sample end (VEND per voice = take ms * 4096/ratio >> 12); capture cap 1440 + 40 ms (< 65536
+  samples, the 2nd copy's head was overwritten before).
+- **v1.6 (1160), emulator-tested:**
+  - Home: 5 tiles MPC LOOP KEYS **S-EDIT** SYS, 4 shown, the view scrolls one right for SYS (a '>' hints it).
+  - S-EDIT page (P_KSET = 4) = the KEYS sound: CUTOFF/RESO (knobs PARA-A/B, ADC ch 6/7 via 0x1277E8 -> 0..127,
+    A = 127 = filter off), ATTACK (PARA-C / 8 -> 0..2000 ms), RELEASE (dial), REVERSE (ENTER/dial). KEYS stays
+    live on the EDIT page (pads and MIDI play the keyboard).
+  - **Filter (DSP):** Chamberlin state-variable low-pass on the previous sample's voice sum (1 sample latency), in
+    the free block 0x50-0xF0; f and q are 15-bit coefficients = an op (8 bits) + the DMAC `lo7` word (op 0x34 mem
+    0xC6/0xE6), the same trick as Roland's base EQ; cutoff 30 Hz - 7 kHz exponential; model: -2.6 dB at fc,
+    12 dB/oct, +11.8 dB peak at high resonance. out = lp * wet + voices * dry + input * thru.
+  - **Reverse (DSP):** AGE_E counter reset by the host at the end of the take; REF = AGE * ref_f + AGE_E * ref_r;
+    voices compute -X = PHI * dir - REF (dir +64 fwd, -64 rev) -> reverse reads from the take's end backwards.
+  - **Attack/release ramps** count steps from the clock (elapsed / period), so a slow main-loop pass (a draw costs
+    ms) doesn't stretch them. Voice states: 1 waiting, 2 held, 3 releasing, 4 attacking.
+  - **Gate:** Roland's DSP writers 0x108936 (coef), 0x1088C0 (raw), 0x108A5C (pair), 0x108B64 (ERAM group),
+    0x1096D2 (loader) start with `jmp gate_x`: chip-1 writes are dropped while KGATE (KEYS owns DSP1). The main loop
+    turns PARA knob moves into FX parameter writes on any screen; without the gate they'd land in our program.
+    Our own writes use own_coef / own_eram / own_load (straight into the routine after its first instruction).
+  - Assembler: jsr/jmp accept labels (abs24 relocation).
+
 ### Hardware results 2026-10-14 (v1.1 / v1.2) and v1.3
 - **KEYS works on the unit:** pitched across the pads, fast chords "sound great". Our own DSP1 program, on hw.
 - **mc3 does not exist as a general register on the FX core (DSP1).** Odd voices used mc3 for their level
