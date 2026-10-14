@@ -255,6 +255,17 @@ def main(image_path, out):
     ys = sim.out[2000:]; print('  f over the hold %.0f Hz' % freq(ys)[0])
     sim.pad(7, False); sim.run(700)
     print('  after release:', [e.rb(bm.VSTATE + v) for v in range(bm.NV)], 'VXF', [e.rb(bm.VXF + v) for v in range(bm.NV)])
+    sim.key(bm.K_UP); sim.key(bm.K_ENTER); sim.run(20)                       # reverse on, loop still on
+    sim.out = []; sim.pad(7); pk, sts = [], []
+    for _ in range(15):
+        sim.run(100); ys = sim.out[-4000:]; pk.append('%.3f' % (max(abs(y) for y in ys) / 0x7FFFFF))
+        sts.append(''.join(str(e.rb(bm.VSTATE + v)) for v in range(bm.NV)))
+    print('REVERSE + LOOP (KREV %d) hold 1.5 s, peak per 100 ms:' % e.rb(bm.KREV), pk)
+    print('  voice states per 100 ms:', sts)
+    ys = sim.out[2000:]; print('  f over the hold %.0f Hz' % freq(ys)[0])
+    sim.pad(7, False); sim.run(700)
+    print('  after release:', [e.rb(bm.VSTATE + v) for v in range(bm.NV)], 'VXF', [e.rb(bm.VXF + v) for v in range(bm.NV)])
+    sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.run(20)                     # reverse off, cursor back on LOOP
     sim.key(bm.K_ENTER); sim.run(20); print('LOOP off: KLOOP', e.rb(bm.KLOOP))
     sim.key(bm.K_EXIT); sim.run(10); print('EXIT -> page', e.rb(bm.PAGE), 'active', e.rb(bm.KACTIVE), 'gate', e.rb(bm.KGATE), 'CUR', e.rb(bm.CUR))
     sim.key(bm.K_RIGHT); sim.run(5); shots.append(('home scrolled', sim.shot())); sim.key(bm.K_LEFT)

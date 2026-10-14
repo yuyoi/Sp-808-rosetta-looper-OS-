@@ -246,7 +246,7 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - **Mixer change:** out = voices + thru + lp * wet + voices * (wet ? -1 : 0), i.e. `flt_dry` now means dry - 1.
   keys_set_cut writes 0/0 (off) and 64/-64 (on). A stale 64 here doubled every level (0.187 instead of 0.094).
 - Model: 0.44 s take held 1.5 s -> constant peak 0.094 per 100 ms, f 1001 Hz across 4 handoffs, clean release,
-  no stuck links. Reverse + loop is coded (klp_rv) but not covered by the test.
+  no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
 ### Hardware results 2026-10-14 (v1.1 / v1.2) and v1.3
