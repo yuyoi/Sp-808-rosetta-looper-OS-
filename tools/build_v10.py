@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1182, '1.82'              # 1.82 = DDS-DSP labels SQUARE / WIDTH / SAW2 (1.81: idle oscs frozen, 7-seg R / M)
+VERSION, VER_TXT = 1190, '1.9'               # 1.9 = DDS-DSP tabs OSC / LA / ENV (1.82: labels, POLY; 1.81: idle oscs frozen)
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -360,6 +360,38 @@ KMXS, KMXSAW, KMXPUL, KPW, KMXTRI, KMXUNI, KDET, KOCT, KDCUR = (RAM_BASE + 0x3A8
 # DDS-DSP items in screen order (2 columns x 4 rows): RAM, min, max, DSP field, kind (lvl: x4, pw: x16 - 128)
 DDS_UI = [(KMXS, 0, 16, 'mxs', 'lvl'), (KMXSAW, 0, 16, 'mxsaw', 'lvl'), (KMXPUL, 0, 16, 'mxpul', 'lvl'), (KPW, 1, 15, 'pw', 'pw'),
           (KMXTRI, 0, 16, 'mxtri', 'lvl'), (KMXUNI, 0, 16, 'mxuni', 'lvl'), (KDET, 0, 15, None, None), (KOCT, 0, 4, None, None)]
+# v1.9: DDS-DSP tabs (ENTER = next tab), LA (sampled attack, the oscillators carry the note), ENV (ADSR, filter env)
+KDTAB, KDEC, KSUS, KFENV, KFDEC, KLAA, KLAF = (RAM_BASE + 0x3B1 + i for i in range(7))
+VSUS, VLAS, VLAC = RAM_BASE + 0x3B8, RAM_BASE + 0x3C0, RAM_BASE + 0x3C8   # per voice: sustain level; LA state (0 none,
+                                                                         # 1 sample fading, 2 sample out); last mxs coef
+KFE_CUR, KFE_LAST = RAM_BASE + 0x3D0, RAM_BASE + 0x3D1                  # filter env (cutoff knob units), last cutoff written
+KDEC_T, KFE_T = RAM_BASE + 0x3D4, RAM_BASE + 0x3D8                      # decay / filter env ramp clocks (ms)
+VLAT, VSEND = RAM_BASE + 0x3E0, RAM_BASE + 0x400                        # per voice (longs): LA fade start, sample end
+DEC_MS = (0, 50, 100, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000, 3000, 4000, 6000, 8000)   # full-scale; 0 = off
+DEC_PER = bytes(max(1, ms // KEYS_LEVEL) if ms else 0 for ms in DEC_MS)  # decay: ms per level step
+FDEC_PER = bytes(max(1, ms // 64) if ms else 0 for ms in DEC_MS)         # filter env: ms per 2-unit step (128 units)
+LA_MS = (0, 10, 20, 30, 50, 75, 100, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000)    # sample time; 0 = LA off
+LAF_MS = (1, 10, 20, 30, 50, 75, 100, 150, 200, 300, 400, 500, 700, 1000, 1500, 2000)   # sample fade-out
+# items: (label, RAM, min, max, apply routine, display: ('n',) number, ('t', table, suffix), ('o', table, suffix) = OFF at
+# 0, ('oct',)). Columns: even index left (x 5, max 13 characters), odd right.
+DDS_TABS = [
+    ('OSC', [('SAMPLE', KMXS, 0, 16, 'dds_ap0', ('n',)), ('SAW', KMXSAW, 0, 16, 'dds_ap1', ('n',)),
+             ('SQUARE', KMXPUL, 0, 16, 'dds_ap2', ('n',)), ('WIDTH', KPW, 1, 15, 'dds_ap3', ('t', 'pw_pct', '%')),
+             ('TRI', KMXTRI, 0, 16, 'dds_ap4', ('n',)), ('SAW2', KMXUNI, 0, 16, 'dds_ap5', ('n',)),
+             ('DETUNE', KDET, 0, 15, None, ('t', 'det_ct', 'C')), ('OCT', KOCT, 0, 4, None, ('oct',))]),
+    ('LA', [('TIME', KLAA, 0, 15, None, ('o', 'la_ms', 'MS')), ('FADE', KLAF, 0, 15, None, ('t', 'laf_ms', 'MS')),
+            ('SAMPLE', KMXS, 0, 16, 'dds_ap0', ('n',))]),
+    ('ENV', [('ATTACK', KATT, 0, 15, None, ('t', 'att_ms', 'MS')), ('DECAY', KDEC, 0, 15, None, ('o', 'dec_ms', 'MS')),
+             ('SUSTAIN', KSUS, 0, 16, None, ('n',)), ('RELEASE', KREL, 0, len(REL_MS) - 1, None, ('t', 'rel_ms', 'MS')),
+             ('FLT ENV', KFENV, 0, 16, None, ('n',)), ('FLT DEC', KFDEC, 0, 15, None, ('o', 'dec_ms', 'MS'))])]
+DDS_DESC = ['OSCILLATORS', 'SAMPLE ATTACK', 'ENVELOPES']
+# Classic Mac style pages (user's pick): window, pinstriped title bar, 3-row scrolling list, values right-aligned;
+# ENTER = the full-screen submode menu
+KDMENU, KDMSEL, KDTOP, KDY = (RAM_BASE + 0x3DC + i for i in range(4))   # menu open, menu cursor, first row shown, row y
+DDS_STRS = ([('s_dtt%d' % ti, 'DDS-DSP: ' + DDS_DESC[ti]) for ti in range(len(DDS_TABS))] +
+            [('s_dsd%d' % ti, d) for ti, d in enumerate(DDS_DESC)] +
+            [('s_di%d_%d' % (ti, i), it[0]) for ti, (_, items) in enumerate(DDS_TABS) for i, it in enumerate(items)])
+def sb_thumb(n): return max(3, round(22 * 3 / n))                       # scroll bar thumb height for n rows
 OSC_MIDI0, OSC_STEPS = 12, 16                                      # osc table: MIDI 12.. in 1/16 semitones (detune steps)
 OSC_TAB = b''.join(bytes(keysdsp.osc_fields(440 * 2 ** ((OSC_MIDI0 + i / OSC_STEPS - 69) / 12))) for i in range(110 * OSC_STEPS))
 # loop: a held note hands over to a fresh voice that starts at the loop start, 40 ms crossfade (source time)
@@ -549,8 +581,22 @@ def build():
     a.cmp_b_imm(P_KSET, 'r0l'); a.beq16('k_kset')
     a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('k_dds')
     a.cmp_b_imm(P_LOOP, 'r0l'); a.bne16('k_other')
-    a.cmp_w_imm(K_ENTER, 5); a.bne16('k_other')                   # LOOP page: ENTER = debug trace on/off
+    a.cmp_w_imm(K_ENTER, 5); a.bne('kl_nent')                     # LOOP page: ENTER = debug trace on/off
     a.mov_b_from_abs(LDEBUG, 'r0l'); a.xor_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', LDEBUG); a.bra16('redraw')
+    a.label('kl_nent')                                            # v1.9 stopgap (Looper v2 gets the ASSIGN menu):
+    a.cmp_w_imm(K_EXIT, 5); a.bne('kl_nex')                       # EXIT = stop (stopped / empty: home)
+    a.mov_b_from_abs(LSTATE, 'r0l'); a.cmp_b_imm(LS_PLAY, 'r0l'); a.beq('kl_stop')
+    a.cmp_b_imm(LS_DUB, 'r0l'); a.bne16('k_other')
+    a.label('kl_stop'); a.bsr16('lp_stop_all'); a.bra16('done')
+    a.label('kl_nex')
+    a.cmp_w_imm(K_LEFT, 5); a.bne('kl_nl')                        # LEFT = undo the last layer
+    a.mov_b_from_abs(LSTATE, 'r0l'); a.cmp_b_imm(LS_PLAY, 'r0l'); a.beq('kl_undo')
+    a.cmp_b_imm(LS_STOP, 'r0l'); a.bne16('done')
+    a.label('kl_undo'); a.bsr16('lp_undo'); a.bsr16('lp_redraw'); a.bra16('done')
+    a.label('kl_nl')
+    a.cmp_w_imm(K_DOWN, 5); a.bne16('done')                       # DOWN = clear all (only when stopped)
+    a.mov_b_from_abs(LSTATE, 'r0l'); a.cmp_b_imm(LS_STOP, 'r0l'); a.bne16('done')
+    a.bsr16('lp_clear'); a.bra16('done')
 
     a.label('k_home')                                     # tiles: LEFT/RIGHT work like UP/DOWN
     a.cmp_w_imm(K_LEFT, 5); a.bne('kh_r'); a.mov_w_imm(K_UP, 5)
@@ -677,26 +723,48 @@ def build():
     a.label('kse_rd'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l')
     a.label('kse_rs'); a.mov_b_to_abs('r0l', KREL); a.bra16('redraw')
 
-    a.label('k_dds')                                      # DDS-DSP page: UP/DOWN pick (reading order), dial changes
-    a.cmp_w_imm(K_UP, 5); a.bne('kd_dn')
+    a.label('k_dds')                                      # DDS-DSP: ENTER = submode menu; UP/DOWN pick, dial changes
+    a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('kd_page')
+    a.mov_b_from_abs(KDMSEL, 'r0l')                       # ---- submode menu: UP/DOWN/dial pick, ENTER opens, EXIT back
+    a.cmp_w_imm(K_UP, 5); a.beq('kdm_up'); a.cmp_w_imm(K_LEFT, 5); a.beq('kdm_up')
+    a.cmp_w_imm(K_DOWN, 5); a.beq('kdm_dn'); a.cmp_w_imm(K_RIGHT, 5); a.beq('kdm_dn')
+    a.cmp_w_imm(K_ENTER, 5); a.beq('kdm_ok')
+    a.cmp_w_imm(K_EXIT, 5); a.bne16('done')
+    set_byte(KDMENU, 0); a.bra16('redraw')
+    a.label('kdm_up'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l'); a.bra('kdm_st')
+    a.label('kdm_dn'); a.cmp_b_imm(len(DDS_TABS) - 1, 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l')
+    a.label('kdm_st'); a.mov_b_to_abs('r0l', KDMSEL); a.bra16('redraw')
+    a.label('kdm_ok'); a.mov_b_to_abs('r0l', KDTAB); set_byte(KDCUR, 0); set_byte(KDMENU, 0); a.bra16('redraw')
+    a.label('kd_page')                                    # ---- parameter page
+    a.cmp_w_imm(K_ENTER, 5); a.bne('kd_up')
+    a.mov_b_from_abs(KDTAB, 'r0l'); a.mov_b_to_abs('r0l', KDMSEL); set_byte(KDMENU, 1); a.bra16('redraw')
+    a.label('kd_up'); a.cmp_w_imm(K_UP, 5); a.bne('kd_dn')
     a.mov_b_from_abs(KDCUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l')
     a.mov_b_to_abs('r0l', KDCUR); a.bra16('redraw')
-    a.label('kd_dn'); a.cmp_w_imm(K_DOWN, 5); a.bne('kd_v')
-    a.mov_b_from_abs(KDCUR, 'r0l'); a.cmp_b_imm(len(DDS_UI) - 1, 'r0l'); a.beq16('redraw'); a.add_b_imm(1, 'r0l')
+    a.label('kd_dn'); a.cmp_w_imm(K_DOWN, 5); a.bne16('kd_v')
+    a.mov_b_from_abs(KDTAB, 'r1l')
+    for ti, (tn, items) in enumerate(DDS_TABS):
+        nx = uniq('kdt')
+        a.cmp_b_imm(ti, 'r1l'); a.bne(nx); a.mov_b_imm(len(items) - 1, 'r1h'); a.bra('kd_dmax')
+        a.label(nx)
+    a.bra16('redraw')
+    a.label('kd_dmax')
+    a.mov_b_from_abs(KDCUR, 'r0l'); a.cmp_b_rr('r1h', 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l')
     a.mov_b_to_abs('r0l', KDCUR); a.bra16('redraw')
     a.label('kd_v'); a.cmp_w_imm(K_LEFT, 5); a.beq('kd_lr'); a.cmp_w_imm(K_RIGHT, 5); a.bne16('k_other')
-    a.label('kd_lr'); a.mov_b_from_abs(KDCUR, 'r0l')
-    for i, (var, lo, hi, nm, kind) in enumerate(DDS_UI):
-        nx, dn, st = uniq('kdi'), uniq('kdd'), uniq('kds')
-        a.cmp_b_imm(i, 'r0l'); a.bne16(nx)
-        a.mov_b_from_abs(var, 'r1l')
-        a.cmp_w_imm(K_RIGHT, 5); a.bne(dn)
-        a.cmp_b_imm(hi, 'r1l'); a.bcc16('redraw'); a.add_b_imm(1, 'r1l'); a.bra(st)
-        a.label(dn); a.cmp_b_imm(lo, 'r1l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r1l')
-        a.label(st); a.mov_b_to_abs('r1l', var)
-        if nm: a.bsr16('dds_ap%d' % i)
-        a.bra16('redraw')
-        a.label(nx)
+    a.label('kd_lr'); a.mov_b_from_abs(KDTAB, 'r1h'); a.mov_b_from_abs(KDCUR, 'r0l')
+    for ti, (tn, items) in enumerate(DDS_TABS):
+        for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
+            nx, dn, st = uniq('kdi'), uniq('kdd'), uniq('kds')
+            a.cmp_b_imm(ti, 'r1h'); a.bne16(nx); a.cmp_b_imm(i, 'r0l'); a.bne16(nx)
+            a.mov_b_from_abs(var, 'r1l')
+            a.cmp_w_imm(K_RIGHT, 5); a.bne(dn)
+            a.cmp_b_imm(hi, 'r1l'); a.bcc16('redraw'); a.add_b_imm(1, 'r1l'); a.bra(st)
+            a.label(dn); a.cmp_b_imm(lo, 'r1l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r1l')
+            a.label(st); a.mov_b_to_abs('r1l', var)
+            if ap: a.bsr16(ap)
+            a.bra16('redraw')
+            a.label(nx)
     a.bra16('redraw')
 
     a.label('k_other')
@@ -725,7 +793,8 @@ def build():
         a.mov_l_rr(3, 0); a.mov_b_imm(x, 'r1l'); a.mov_b_imm(y, 'r1h'); a.mov_l_imm(font, 2); a.bsr16('gfx_text')
 
     a.label('draw')
-    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LOOP, 'r0l'); a.beq16('lp_draw')
+    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LOOP, 'r0l'); a.bne('dr_nolp'); a.jmp('lp_draw')   # (> 32 KB away)
+    a.label('dr_nolp')
     a.push_l(2); a.push_l(3)
     a.bsr16('gfx_clear')
     a.mov_b_from_abs(PAGE, 'r0l')
@@ -899,8 +968,7 @@ def build():
     D.text(1, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
     a.label('dks_c3'); D.text(57, 27, 's_gt', 'font_tiny'); a.bra16('d_flush')
 
-    a.label('d_dds')                                      # DDS-DSP: the oscillators of the KEYS voices
-    D.text(1, 1, 's_dds')
+    a.label('d_dds')                                      # DDS-DSP, Classic Mac style (window, list, submode menu)
     def dval(var): a.mov_b_from_abs(var, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
     def doct():
         neg, zero, out = uniq('dn'), uniq('dz'), uniq('de')
@@ -909,18 +977,80 @@ def build():
         a.label(neg); a.mov_b_rr('r0l', 'r2h'); a.mov_b_imm(2, 'r0l'); a.sub_b_rr('r2h', 'r0l'); a.mov_b_imm(ord('-'), 'r2l')
         a.label(out); a.mov_b_st('r2l', 1); a.adds1(1)
         a.label(zero); a.add_b_imm(ord('0'), 'r0l'); a.mov_b_st('r0l', 1); a.adds1(1)
-    cells = [('SAMPLE ', lambda: dval(KMXS)), ('SAW ', lambda: dval(KMXSAW)), ('SQUARE ', lambda: dval(KMXPUL)),
-             ('WIDTH ', lambda: (row_num_word('pw_pct', KPW), row_put('%'))), ('TRI ', lambda: dval(KMXTRI)),
-             ('SAW2 ', lambda: dval(KMXUNI)), ('DETUNE ', lambda: (row_num_word('det_ct', KDET), row_put('C'))),
-             ('OCT ', doct)]
-    for i, (lbl, val) in enumerate(cells):
-        a.mov_l_imm(KROW, 1); row_put(lbl); val(); row_end(5 if i % 2 == 0 else 61, 9 + 6 * (i // 2))
-    a.mov_b_from_abs(KDCUR, 'r0l')
-    for i in range(len(cells)):
-        nx = uniq('ddc')
-        a.cmp_b_imm(i, 'r0l'); a.bne(nx); D.text(1 if i % 2 == 0 else 57, 9 + 6 * (i // 2), 's_gt', 'font_tiny'); a.bra16('d_flush')
-        a.label(nx)
+    def dshow(var, disp):
+        if disp[0] == 'n': dval(var)
+        elif disp[0] == 'oct': doct()
+        elif disp[0] == 't': row_num_word(disp[1], var); row_put(disp[2])
+        else:                                                   # 'o': OFF at 0
+            off, end = uniq('ddo'), uniq('dde')
+            a.mov_b_from_abs(var, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16(off)
+            row_num_word(disp[1], var); row_put(disp[2]); a.bra16(end)
+            a.label(off); row_put('OFF')
+            a.label(end)
+    def mac_window(title, nchars):                          # frame, pinstriped title bar, close box, title
+        D.frame(0, 0, 128, 32)
+        for y in (2, 4, 6): D.fill(2, y, 124, 1)
+        D.fill(4, 1, 7, 7, gfxlib.M_CLR); D.frame(5, 2, 5, 5)
+        w = 4 * nchars + 5; x0 = (128 - w) // 2
+        D.fill(x0, 1, w, 7, gfxlib.M_CLR); D.text(x0 + 3, 2, title, 'font_tiny')
+        D.fill(0, 8, 128, 1)
+    def set_top(cur, n):                                    # KDTOP = first row shown (cursor kept in the middle)
+        z, ok = uniq('dtz'), uniq('dto')
+        a.mov_b_from_abs(cur, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq(z); a.add_b_imm(0xFF, 'r0l')
+        a.label(z)
+        if n > 3: a.cmp_b_imm(n - 2, 'r0l'); a.bcs(ok); a.mov_b_imm(n - 3, 'r0l')
+        else: a.mov_b_imm(0, 'r0l')
+        a.label(ok); a.mov_b_to_abs('r0l', KDTOP)
+    def row_y(i, skip):                                     # row i visible? KDY = its y, else -> skip
+        a.mov_b_from_abs(KDTOP, 'r0l'); a.mov_b_imm(i, 'r1l'); a.sub_b_rr('r0l', 'r1l')
+        a.cmp_b_imm(3, 'r1l'); a.bcc16(skip)
+        a.mov_b_rr('r1l', 'r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.sub_b_rr('r1l', 'r0l')
+        a.add_b_imm(10, 'r0l'); a.mov_b_to_abs('r0l', KDY)
+    a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('dd_page')
+    mac_window('s_dds', 7)                                  # ---- submode menu (full screen)
+    set_top(KDMSEL, len(DDS_TABS))
+    for ti, (tn, items) in enumerate(DDS_TABS):
+        sk = uniq('dms')
+        row_y(ti, sk)
+        a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_dsd%d' % ti, 'font_tiny')   # full name
+        a.mov_b_imm(118, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_gt', 'font_tiny')   # enterable: arrow
+        a.mov_b_from_abs(KDMSEL, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(sk)
+        a.bsr16('dd_rinv')
+        a.label(sk)
     a.bra16('d_flush')
+    a.label('dd_page')                                      # ---- parameter page of the current submode
+    for ti, (tn, items) in enumerate(DDS_TABS):
+        nt = uniq('ddn')
+        nit = len(items)
+        a.mov_b_from_abs(KDTAB, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(nt)
+        mac_window('s_dtt%d' % ti, len('DDS-DSP: ' + DDS_DESC[ti]))
+        set_top(KDCUR, nit)
+        for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
+            sk = uniq('dvs')
+            row_y(i, sk)
+            a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_di%d_%d' % (ti, i), 'font_tiny')
+            a.mov_l_imm(KROW, 1); dshow(var, disp); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+            a.bsr16('dd_rval')
+            a.mov_b_from_abs(KDCUR, 'r0l'); a.cmp_b_imm(i, 'r0l'); a.bne16(sk)
+            a.bsr16('dd_rinv')
+            a.label(sk)
+        if nit > 3:                                         # scroll bar: track + thumb
+            D.fill(124, 9, 1, 22)
+            a.mov_b_from_abs(KDTOP, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm('dd_sb%d' % ti, 1); a.add_l_rr(0, 1)
+            a.mov_b_ld(1, 'r1h'); a.mov_b_imm(123, 'r1l'); a.mov_b_imm(3, 'r2l'); a.mov_b_imm(sb_thumb(nit), 'r2h')
+            a.bsr16('gfx_fill')
+        a.bra16('d_flush')
+        a.label(nt)
+    a.bra16('d_flush')
+    a.label('dd_rval')                                      # KROW right-aligned (ends at x 121) on row KDY
+    a.mov_l_imm(KROW, 3); a.mov_b_imm(0, 'r2l')
+    a.label('ddr_n'); a.mov_b_ldinc(3, 'r0l'); a.beq('ddr_e'); a.inc_b('r2l'); a.bra('ddr_n')
+    a.label('ddr_e'); a.shll_b('r2l'); a.shll_b('r2l'); a.mov_b_imm(123, 'r1l'); a.sub_b_rr('r2l', 'r1l')
+    a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1(KROW, 'font_tiny'); a.rts()
+    a.label('dd_rinv')                                      # selection bar on row KDY
+    D.mode(gfxlib.M_INV)
+    a.mov_b_imm(2, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); a.add_b_imm(0xFF, 'r1h'); a.mov_b_imm(121, 'r2l'); a.mov_b_imm(7, 'r2h')
+    a.bsr16('gfx_fill'); D.mode(gfxlib.M_SET); a.rts()
 
     a.label('d_flush')
     a.bsr16('gfx_flush')
@@ -940,6 +1070,7 @@ def build():
     def coef_val(name, c): return keysdsp.coef_value(DSP_PROG, DSP_PARAMS, name, c)
     T_SHSEL = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_t')
     O_SHSEL = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_o2a')
+    MXS_SHSEL = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_mxs')
     def dsp_voice_level(v):                    # voice v: level target coefficient := VLVL[v]
         a.mov_b_from_abs(VLVL + v, 'r0h'); a.add_b_rr('r0h', 'r0h')                   # x2: +6 dB (v1.72)
         a.mov_b_imm(T_SHSEL, 'r0l'); a.mov_w_rr(0, 8)
@@ -1022,6 +1153,7 @@ def build():
     a.mov_w_imm(0x300 - 0x3C, 1); a.mov_w_imm(0x3C, 8); a.mov_w_imm(1, 0); a.jsr('own_load'); a.adds4(7)
     a.mov_b_imm(0, 'r0l')
     for v in range(NV): a.mov_b_to_abs('r0l', VMUTE + v)                             # fresh program: nothing muted
+    for v in range(NV): a.mov_b_to_abs('r0l', VLAS + v)                              # (and no LA fades)
     a.bsr16('dds_apply')                                                             # and the DDS-DSP settings
     for v in range(NV): dsp_eram('v%d_rdA' % v, 0x18, 0); dsp_eram('v%d_rdB' % v, 0x18, 2)
     dsp_eram('rec_w0', 0); dsp_eram('rec_w1', 0)
@@ -1097,12 +1229,15 @@ def build():
         a.label('dds_go%d' % i)
         sh = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_' + nm)
         for v in range(NV):
+            sk = uniq('dsk')
+            if nm == 'mxs': a.mov_b_from_abs(VLAS + v, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16(sk)   # LA owns it now
             a.mov_b_from_abs(var, 'r0h')
             if kind == 'lvl': a.shll_b('r0h'); a.shll_b('r0h')
             else:
                 for _ in range(4): a.shll_b('r0h')
                 a.xor_b_imm(0x80, 'r0h')
             a.mov_b_imm(sh, 'r0l'); a.mov_w_rr(0, 8); a.mov_w_imm(dsp_addr('v%d_%s' % (v, nm)), 0); a.jsr('own_coef')
+            a.label(sk)
         a.rts()
     a.label('dds_apply')
     for i, (var, lo, hi, nm, kind) in enumerate(DDS_UI):
@@ -1188,7 +1323,7 @@ def build():
     a.add_b_imm(1, 'r0l'); a.and_b_imm(NV - 1, 'r0l')
     a.label('klp_n'); a.mov_b_rr('r0l', 'r5h')                                      # r5h = n
     a.add_b_imm(1, 'r0l'); a.and_b_imm(NV - 1, 'r0l'); a.mov_b_to_abs('r0l', KNEXT)
-    ld_b(VKEY, 'r4l'); ld_b(VPAD, 'r4h')
+    ld_b(VKEY, 'r4l'); ld_b(VPAD, 'r4h'); ld_b(VSUS, 'r2h')
     ld_b(VSTATE, 'r0l'); a.cmp_b_imm(3, 'r0l'); a.bne('klp_tg')
     ld_b(VLVL, 'r2l'); a.bra('klp_tg2')                                              # releasing: carry its level
     a.label('klp_tg'); ld_b(VTGT, 'r2l')
@@ -1198,7 +1333,8 @@ def build():
     a.mov_b_rr('r5h', 'r6l')                                                         # ---- voice n ----
     a.mov_l_from_abs(LTMP, 0); st_l(0, VXS)
     a.mov_b_rr('r5l', 'r0l'); st_b('r0l', VLINK)
-    st_b('r4l', VKEY); st_b('r4h', VPAD); st_b('r2l', VTGT)
+    st_b('r4l', VKEY); st_b('r4h', VPAD); st_b('r2l', VTGT); st_b('r2h', VSUS)
+    a.bsr16('la_reset')
     a.mov_b_imm(0, 'r0l'); st_b('r0l', VLVL); st_b('r0l', VXF)
     a.mov_b_rr('r4l', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0)
     a.mov_l_imm('inv_ratio', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 1); a.mov_w_rr(1, 13)   # e5 = 4096 / ratio
@@ -1294,12 +1430,17 @@ def build():
     a.label('knb_out'); a.rts()
     a.label('keys_set_cut')                    # r0l = knob 0..127 (127 = filter off)
     a.push_l(4); a.mov_b_rr('r0l', 'r4l'); a.extu_w(4); a.extu_l(4)
+    a.mov_b_to_abs('r0l', KFE_LAST)                                                   # filter env: this is the base now
     a.cmp_b_imm(127, 'r4l'); a.bne('ksc_on')
     dsp_coef('flt_wet', 0); dsp_coef('flt_dry', 64); a.bra16('ksc_out')           # off: voices dry
     a.label('ksc_on')
     for nm, tb in (('flt_f1', 'f_hi'), ('flt_f1l', 'f_lo'), ('flt_f2', 'f_hi'), ('flt_f2l', 'f_lo')): dsp_coef_tab(nm, tb)
     dsp_coef('flt_wet', 64); dsp_coef('flt_dry', 0)                                   # on: filtered only
     a.label('ksc_out'); a.pop_l(4); a.rts()
+    a.label('keys_cut_env')                    # r0l = cutoff 0..126: the filter frequency only (the envelope moves it)
+    a.push_l(4); a.mov_b_rr('r0l', 'r4l'); a.extu_w(4); a.extu_l(4)
+    for nm, tb in (('flt_f1', 'f_hi'), ('flt_f1l', 'f_lo'), ('flt_f2', 'f_hi'), ('flt_f2l', 'f_lo')): dsp_coef_tab(nm, tb)
+    a.pop_l(4); a.rts()
     a.label('keys_set_res')
     a.push_l(4); a.mov_b_rr('r0l', 'r4l'); a.and_b_imm(0x7F, 'r4l'); a.extu_w(4); a.extu_l(4)
     dsp_coef_tab('flt_q', 'q_hi'); dsp_coef_tab('flt_ql', 'q_lo')
@@ -1461,7 +1602,76 @@ def build():
         set_byte(VSTATE + v, 0)
         a.label(wr); dsp_voice_level(v)
         a.label(nx)
-    a.label('kv_out'); a.pop_l(2); a.rts()
+    a.label('kv_out'); a.bsr16('kv_env'); a.pop_l(2); a.rts()
+
+    a.label('la_reset')                        # voice r6l: if LA faded its sample, the sample level is SAMPLE again
+    a.push_l(1); a.push_l(2)
+    ld_b(VLAS, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('lar_out')
+    a.mov_b_imm(0, 'r0l'); st_b('r0l', VLAS)
+    a.mov_b_from_abs(KMXS, 'r0h'); a.shll_b('r0h'); a.shll_b('r0h'); a.mov_b_imm(MXS_SHSEL, 'r0l'); a.mov_w_rr(0, 8)
+    dsp_voice_coef('mxs')
+    a.label('lar_out'); a.pop_l(2); a.pop_l(1); a.rts()
+
+    a.label('kv_env')                          # v1.9: DECAY to SUSTAIN, LA sample fade, filter envelope (every pass)
+    a.mov_b_from_abs(KDEC, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm('dec_per', 2); a.add_l_rr(0, 2)
+    a.mov_b_ld(2, 'r2l'); a.extu_w(2); a.extu_l(2)
+    a.mov_w_rr(2, 2); a.bne('kve_d')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, KDEC_T); a.bra16('kve_la')          # off: keep its clock fresh
+    a.label('kve_d')
+    ramp_steps(KDEC_T, None, None, 'kve_la')                                           # r2l = levels to drop
+    for v in range(NV):                        # held voices step their target down to VSUS (state 6 fades in to it)
+        nx, go, cl, st = uniq('kd'), uniq('kdg'), uniq('kdc'), uniq('kds')
+        a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq(go); a.cmp_b_imm(6, 'r0l'); a.bne16(nx)
+        a.label(go)
+        a.mov_b_from_abs(VTGT + v, 'r0l'); a.mov_b_from_abs(VSUS + v, 'r1l')
+        a.cmp_b_rr('r0l', 'r1l'); a.bcc16(nx)                                          # at / below sustain already
+        a.sub_b_rr('r2l', 'r0l'); a.bcs(cl)
+        a.cmp_b_rr('r1l', 'r0l'); a.bcc(st)
+        a.label(cl); a.mov_b_rr('r1l', 'r0l')
+        a.label(st); a.mov_b_to_abs('r0l', VTGT + v)
+        a.mov_b_from_abs(VSTATE + v, 'r1l'); a.cmp_b_imm(2, 'r1l'); a.bne16(nx)
+        a.mov_b_to_abs('r0l', VLVL + v); dsp_voice_level(v)
+        a.label(nx)
+    a.label('kve_la')                          # LA: LA TIME after the start the sample fades out over FADE (cut at its end)
+    for v in range(NV):
+        nx, cut, wr = uniq('kl'), uniq('klc'), uniq('klw')
+        a.mov_b_from_abs(VLAS + v, 'r0l'); a.cmp_b_imm(1, 'r0l'); a.bne16(nx)
+        a.mov_b_from_abs(VSTATE + v, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16(nx)
+        a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(VSEND + 4 * v, 1); a.cmp_l_rr(1, 0); a.bcc16(cut)
+        a.mov_l_from_abs(VLAT + 4 * v, 1); a.cmp_l_rr(1, 0); a.bcs16(nx)               # not yet
+        a.sub_l(1, 0)                                                                  # er0 = ms into the fade
+        a.mov_b_from_abs(KLAF, 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_rr(1, 1)
+        a.mov_l_imm('laf_ms', 2); a.add_l_rr(1, 2); a.mov_w_ld(2, 2); a.extu_l(2)          # er2 = fade length
+        a.cmp_l_rr(2, 0); a.bcc16(cut)                                                 # fade over
+        a.mov_l_rr(2, 1); a.sub_l(0, 1)                                                # er1 = ms left
+        a.mov_b_from_abs(KMXS, 'r0l'); a.extu_w(0); a.add_w_rr(0, 0); a.add_w_rr(0, 0)  # r0 = SAMPLE x 4
+        a.mulxu_w(1, 0); a.divxu_w(2, 0); a.bra(wr)                                    # r0 = level * left / fade
+        a.label(cut); set_byte(VLAS + v, 2); a.mov_b_imm(0, 'r0l')
+        a.label(wr)
+        a.mov_b_from_abs(VLAC + v, 'r1l'); a.cmp_b_rr('r0l', 'r1l'); a.beq16(nx)
+        a.mov_b_to_abs('r0l', VLAC + v)
+        a.mov_b_rr('r0l', 'r0h'); a.mov_b_imm(MXS_SHSEL, 'r0l'); a.mov_w_rr(0, 8)
+        a.mov_w_imm(dsp_addr('v%d_mxs' % v), 0); a.jsr('own_coef')
+        a.label(nx)
+    # filter envelope (one filter on the voice sum: each note-on restarts it): cutoff = knob A + env, env decays
+    a.mov_b_from_abs(KNOB, 'r0l'); a.cmp_b_imm(127, 'r0l'); a.beq16('kve_out')         # filter off
+    a.mov_b_from_abs(KFE_CUR, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('kve_fw')
+    a.mov_b_from_abs(KFDEC, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm('fdec_per', 2); a.add_l_rr(0, 2)
+    a.mov_b_ld(2, 'r2l'); a.extu_w(2); a.extu_l(2)
+    a.mov_w_rr(2, 2); a.bne('kve_fr'); set_byte(KFE_CUR, 0); a.bra16('kve_fw')            # FLT DEC off: back at once
+    a.label('kve_fr')
+    ramp_steps(KFE_T, None, None, 'kve_fw')                                            # r2l = steps of 2 units
+    a.mov_b_from_abs(KFE_CUR, 'r0l'); a.add_b_rr('r2l', 'r2l'); a.sub_b_rr('r2l', 'r0l'); a.bcc('kve_fs')
+    a.mov_b_imm(0, 'r0l')
+    a.label('kve_fs'); a.mov_b_to_abs('r0l', KFE_CUR)
+    a.label('kve_fw')
+    a.mov_b_from_abs(KNOB, 'r0l'); a.mov_b_from_abs(KFE_CUR, 'r1l'); a.add_b_rr('r1l', 'r0l'); a.bcs('kve_fc')
+    a.cmp_b_imm(127, 'r0l'); a.bcs('kve_fk')
+    a.label('kve_fc'); a.mov_b_imm(126, 'r0l')
+    a.label('kve_fk')
+    a.mov_b_from_abs(KFE_LAST, 'r1l'); a.cmp_b_rr('r0l', 'r1l'); a.beq('kve_out')
+    a.mov_b_to_abs('r0l', KFE_LAST); a.bsr16('keys_cut_env')
+    a.label('kve_out'); a.rts()
 
     # ---- MIDI: the stock note-on / note-off handlers are replaced by these while KEYS plays (table 0x164B88) ----
     a.label('m_on_tr')                         # r0l = channel; note at MIDI_NOTE, velocity at MIDI_VEL
@@ -1500,6 +1710,11 @@ def build():
     a.mov_b_rr('r6l', 'r0l'); a.extu_w(0); a.extu_l(0)
     a.mov_l_imm(VPAD, 1); a.add_l_rr(0, 1); a.mov_b_st('r4l', 1)
     a.mov_l_imm(VTGT, 1); a.add_l_rr(0, 1); a.mov_b_st('r4h', 1)                     # target level (er0 = voice)
+    a.push_l(0)                                                                      # VSUS = level * SUSTAIN / 16
+    a.mov_b_from_abs(KSUS, 'r1l'); a.mov_b_rr('r4h', 'r0l'); a.mulxu_b('r1l', 0)
+    for _ in range(4): a.shlr_w(0)
+    a.mov_b_rr('r0l', 'r2l'); a.pop_l(0)
+    a.mov_l_imm(VSUS, 1); a.add_l_rr(0, 1); a.mov_b_st('r2l', 1)
     a.mov_l_imm(VSTATE, 1); a.add_l_rr(0, 1); a.mov_b_imm(1, 'r0l'); a.mov_b_st('r0l', 1)
     a.mov_b_rr('r4l', 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_rr(0, 5); a.add_l_rr(0, 5); a.add_l_rr(0, 5)
     a.add_l_rr(5, 5)                                                                 # er5 = pad * 6
@@ -1515,11 +1730,25 @@ def build():
     for _ in range(6): a.shlr_l2(0)                                                  # >> 12
     a.mov_l_from_abs(TICK_MS, 1); a.add_l_rr(1, 0); a.add_l_imm(3, 0)                # + now + start delay
     a.mov_b_rr('r6l', 'r1l'); a.extu_w(1); a.extu_l(1); a.shll_l2(1); a.add_l_imm(VEND, 1); a.mov_l_st(0, 1)
+    a.add_l_imm(VSEND - VEND, 1); a.mov_l_st(0, 1)                                   # (kept for LA)
     a.mov_b_rr('r6l', 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_rr(0, 6)            # er6 = voice (zero-extended)
     st_b('r4l', VKEY); a.mov_b_imm(0, 'r0l'); st_b('r0l', VXF)
     dsp_voice_coef('sel', 0)                                                         # starts at the take's start
     a.bsr16('keys_osc_note')                                                         # DDS oscillators
     a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VLX)                                         # no handoff (loop off)
+    a.bsr16('la_reset')                                                              # its sample level back if LA faded it
+    a.mov_b_from_abs(KFENV, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('kn_nofe')            # filter env: retrigger (paraphonic)
+    a.shll_b('r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.mov_b_to_abs('r0l', KFE_CUR)   # amount x 8 knob units
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, KFE_T)
+    a.label('kn_nofe')
+    a.mov_b_from_abs(KMXS, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('kn_nola')          # synth only: nothing to fade
+    a.mov_b_from_abs(KLAA, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('kn_nola')
+    a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0); a.mov_l_imm('la_ms', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 0)
+    a.extu_l(0); a.mov_l_from_abs(TICK_MS, 1); a.add_l_rr(1, 0); a.add_l_imm(3, 0); st_l(0, VLAT)   # fade start
+    a.mov_b_imm(1, 'r0l'); st_b('r0l', VLAS)
+    a.mov_b_from_abs(KMXS, 'r0l'); a.shll_b('r0l'); a.shll_b('r0l'); st_b('r0l', VLAC)
+    a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VEND); a.bra16('kn_noloop')                 # the oscillators carry it: no end, no loop
+    a.label('kn_nola')
     a.mov_b_from_abs(KMXS, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('kn_smp')
     a.mov_l_imm(0xFFFFFFFF, 0); st_l(0, VEND); a.bra16('kn_noloop')                  # synth only: held = sounding
     a.label('kn_smp')
@@ -2345,6 +2574,7 @@ def build():
     set_byte(LMSG, 0); set_byte(LPRESSED, 1)
     a.mov_b_from_abs(LSTATE, 'r0l'); a.mov_b_to_abs('r0l', LST_AT_PRESS)
     since(LPRESS_T); a.mov_l_from_abs(TICK_MS, 1); a.mov_l_to_abs(1, LPRESS_T)
+    a.bra('lpp_single')                                         # v1.9: taps only (EXIT / LEFT / DOWN do the rest)
     a.cmp_l_imm(DTAP_MS, 0); a.bcc('lpp_single')
     a.mov_b_from_abs(LSTATE, 'r0l')                             # double tap
     a.cmp_b_imm(LS_DUB, 'r0l'); a.beq16('lp_stop_all'); a.cmp_b_imm(LS_PLAY, 'r0l'); a.beq16('lp_stop_all')
@@ -2370,7 +2600,7 @@ def build():
     a.label('lp_release')
     a.btst_abs(0, LPRESSED); a.bne('lr_go'); a.rts()
     a.label('lr_go')
-    set_byte(LPRESSED, 0)
+    set_byte(LPRESSED, 0); a.rts()                              # v1.9: no hold actions on PAD SAMPLING
     since(LPRESS_T); a.cmp_l_imm(HOLD_MS, 0); a.bcc('lr_hold'); a.rts()
     a.label('lr_hold')
     trace_b('H', LST_AT_PRESS)
@@ -2644,9 +2874,9 @@ def build():
     a.label('icon_stop'); a.raw(gfxlib.bitmap(STOP_ICON))
     a.label('lp_masks'); a.raw(bytes([0, 1, 3, 7, 15, 31]))
     for lbl, s in (LP_MSGS + [('s_ls0', 'READY'), ('s_ls1', 'REC'), ('s_ls2', 'SAVE'), ('s_ls3', 'PLAY'),
-                              ('s_ls4', 'DUB'), ('s_ls5', 'STOP'), ('s_lh0', 'TAP=REC  EXIT=HOME'),
-                              ('s_lh2', 'SAVING LAYER...'), ('s_lh3', 'TAP=DUB 2X=STOP HOLD=UNDO'),
-                              ('s_lh5', 'TAP=PLAY  HOLD=CLEAR'), ('s_dbghelp', 'TRACE  ENTER=BACK')] +
+                              ('s_ls4', 'DUB'), ('s_ls5', 'STOP'), ('s_lh0', 'SMPL=REC  EXIT=HOME'),
+                              ('s_lh2', 'SAVING LAYER...'), ('s_lh3', 'SMPL=DUB  EXIT=STOP  <=UNDO'),
+                              ('s_lh5', 'SMPL=PLAY  <=UNDO  DN=CLEAR'), ('s_dbghelp', 'TRACE  ENTER=BACK')] +
                        [('s_L%d' % (i + 1), 'L%d' % (i + 1)) for i in range(MAX_LAYERS)]):
         a.label(lbl); a.string(s)
     a.align2()
@@ -2663,12 +2893,18 @@ def build():
     a.label('pw_pct'); a.raw(struct.pack('>16H', *[round(i * 100 / 16) for i in range(16)]))
     a.label('det_ct'); a.raw(struct.pack('>16H', *[round(i * 100 / OSC_STEPS) for i in range(16)]))
     a.label('osc_tab'); a.raw(OSC_TAB); a.align2()
-    for tab in ('t', 'g', 'd2', 'd1', 'd0', 'sel', 'o2a', 'o1a', 'o0a', 'o2b', 'o1b', 'o0b'):   # voice -> DSP word of each field
+    for tab in ('t', 'g', 'd2', 'd1', 'd0', 'sel', 'o2a', 'o1a', 'o0a', 'o2b', 'o1b', 'o0b', 'mxs'):   # voice -> DSP word of each field
         a.label('kt_' + tab); a.raw(struct.pack('>%dH' % NV, *[dsp_addr('v%d_%s' % (v, tab)) for v in range(NV)]))
     a.label('rel_ms'); a.raw(struct.pack('>%dH' % len(REL_MS), *REL_MS))
     a.label('inv_ratio'); a.raw(struct.pack('>%dH' % NKEYS, *INV_RATIO))
     a.label('cut_hz'); a.raw(struct.pack('>128H', *CUT_HZ))
     a.label('att_ms'); a.raw(struct.pack('>16H', *ATT_MS))
+    for lb, tb in (('la_ms', LA_MS), ('laf_ms', LAF_MS), ('dec_ms', DEC_MS)): a.label(lb); a.raw(struct.pack('>16H', *tb))
+    a.label('dec_per'); a.raw(DEC_PER); a.label('fdec_per'); a.raw(FDEC_PER); a.align2()
+    for ti, (tn, items) in enumerate(DDS_TABS):                # scroll thumb y per first row shown
+        nit = len(items)
+        if nit > 3: a.label('dd_sb%d' % ti); a.raw(bytes(9 + round((22 - sb_thumb(nit)) * top / (nit - 3)) for top in range(nit - 2)))
+    a.align2()
     a.label('f_hi'); a.raw(bytes(F_HI)); a.label('f_lo'); a.raw(bytes(F_LO))
     a.label('q_hi'); a.raw(bytes(Q_HI)); a.label('q_lo'); a.raw(bytes(Q_LO))
     a.label('att_per'); a.raw(ATT_PER); a.label('att_inc'); a.raw(ATT_INC)
@@ -2690,7 +2926,7 @@ def build():
                    ('s_armed', 'HIT A PAD'), ('s_cancel', 'EXIT=CANCEL'),
                    ('s_looper', 'LOOPER'), ('s_keys', 'KEYBOARD'),
                    ('s_soon', 'COMING SOON'), ('s_exithelp', 'EXIT=HOME'),
-                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), ('s_dds', 'DDS-DSP'), ('s_ksamp', 'SAMPLING...'),
+                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), ('s_dds', 'DDS-DSP'), ('s_dtab0', 'OSC'), ('s_dtab1', 'LA'), ('s_dtab2', 'ENV'), *DDS_STRS, ('s_ksamp', 'SAMPLING...'),
                    ('s_kwait', 'EXIT=CANCEL'), ('s_kplay', 'PLAY SRC'), ('s_kphelp', 'SHIFT+EXIT=PICK  UP/DN'), ('s_krel', 'REL')):
         a.label(lbl); a.string(s)
     return a.assemble(), a.labels
@@ -2753,6 +2989,11 @@ def main(raw, outdir):
         a.mov_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', KTHRU)
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
+        for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0)):
+            a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
+        a.mov_b_imm(0, 'r0l')
+        for v_ in range(NV): a.mov_b_to_abs('r0l', VLAS + v_)
     ablob, alabels = bootanim.patch(img, ANIM_BASE, ram_init)
     assert ANIM_BASE + len(ablob) < DSP_BASE
     p = SPLASH2_AT - 0x100000

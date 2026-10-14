@@ -171,7 +171,9 @@ On the card, not tested yet:
   release / reverse / loop / THRU, PAD BANK.
 - [ ] Keyboard next: resample the keys' output, stock FX back after KEYS, longer samples, MIDI channel setting.
 - [x] DDS-DSP (v1.8-v1.81, works on hw): saw / pulse + PW / triangle / unison + detune / octave, sample layer.
-- [ ] DDS next: filter envelope + LFO (v1.9), 2-op FM + wavetable from a sample (v2.0), VARI PITCH screen rebuild.
+- [ ] DDS next: LA + ENV tabs (v1.9, built), LFO (v1.91), voice modes (MONO / UNI-8 / GLIDE / ARP), 2-op FM +
+  wavetable from a sample, VARI PITCH screen rebuild.
+- [ ] Stretch: an animation page with Hex Girl dancing, an uwu face mode and adjustable glitches.
 - [ ] Looper v2: 4 loops synced to loop 1, faders A-D, ASSIGN menu (single-switch mode), per-loop FX
   (plan in `LOOPER_DESIGN.md`).
 - [ ] Strip the groove/song screens.

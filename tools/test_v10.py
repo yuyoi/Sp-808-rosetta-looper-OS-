@@ -128,7 +128,7 @@ def main(image_path, out):
     e.stubs[bm.SEG_POS], e.stubs[bm.SEG_PUT] = seg_pos, seg_put
     segline = lambda: ''.join(bm.seg_decode(e.seg.get(i, 0)) for i in range(bm.SEG_DIGITS))
     e.wb(bm.KTHRU, 1)                                        # as the boot RAM init (not run here) sets it
-    for v_, val_ in ((bm.KMXS, 16), (bm.KPW, 8), (bm.KDET, 2), (bm.KOCT, 2)): e.wb(v_, val_)
+    for v_, val_ in ((bm.KMXS, 16), (bm.KPW, 8), (bm.KDET, 2), (bm.KOCT, 2), (bm.KSUS, 16), (bm.KLAF, 6), (bm.KFDEC, 6)): e.wb(v_, val_)
     e.wb(bm.PAGE, bm.P_HOME); sim.call('menu', 0); sim.run(5)
     sim.key(bm.K_SYSTEM); sim.run(30)                        # SYSTEM = KEYS page: program load + routing
     print('enter    ', sim.kstate(), 'loaded', e.rb(bm.KLOADED), 'log', sim.dsp_log[0], '... %d writes' % len(sim.dsp_log),
@@ -337,6 +337,52 @@ def main(image_path, out):
     for _ in range(4): sim.key(bm.K_DOWN)
     for _ in range(8): sim.key(bm.K_LEFT)                      # UNISON 0
     print('restored: SAMPLE %d SAW %d UNISON %d' % (e.rb(bm.KMXS), e.rb(bm.KMXSAW), e.rb(bm.KMXUNI)))
+    # ---- v1.9: tabs (ENTER), LA (sampled attack, the oscillators carry on), ENV decay / sustain, filter env ----
+    def act(): return [v for v in range(bm.NV) if e.rb(bm.VSTATE + v)]
+    for _ in range(4): sim.key(bm.K_UP)                        # UNISON -> SAW
+    for _ in range(16): sim.key(bm.K_RIGHT)                    # SAW 16 (SAMPLE is 16)
+    sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.run(10); shots.append(('DDS-DSP menu', sim.shot()))
+    sim.key(bm.K_ENTER); sim.run(10)                           # menu: OSC -> LA
+    for _ in range(6): sim.key(bm.K_RIGHT)                     # TIME 100 ms (FADE 100 ms)
+    sim.run(20); shots.append(('DDS-DSP LA', sim.shot()))
+    print('tab %d cursor %d: LA TIME %d ms FADE %d ms' % (e.rb(bm.KDTAB), e.rb(bm.KDCUR), bm.LA_MS[e.rb(bm.KLAA)], bm.LAF_MS[e.rb(bm.KLAF)]))
+    sim.out = []; sim.pad(7); marks = []
+    for ms in (60, 90, 50, 70, 730):                           # at 60, 150, 200, 270, 1000 ms
+        sim.run(ms); v = act()[0]; marks.append((cf('v%d_mxs' % v), e.rb(bm.VLAS + v), e.rb(bm.VSTATE + v)))
+    f, pk = freq(sim.out[-13000:])
+    print('LA: (sample level, LA state, voice state) at 60/150/200/270/1000 ms %s (expect 64 .. ~32 .. 0, LA 2, held); '
+          'saw after the take: f %.1f Hz peak %.3f' % (marks, f, pk))
+    sim.pad(7, False); sim.run(600)
+    for _ in range(6): sim.key(bm.K_LEFT)                      # LA TIME off
+    sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(10)   # menu: LA -> ENV
+    sim.key(bm.K_DOWN)
+    for _ in range(7): sim.key(bm.K_RIGHT)                     # DECAY 500 ms
+    sim.key(bm.K_DOWN)
+    for _ in range(8): sim.key(bm.K_LEFT)                      # SUSTAIN 8 (half)
+    sim.run(20); shots.append(('DDS-DSP ENV', sim.shot()))
+    sim.pad(7); lv = []
+    for _ in range(8): sim.run(100); v = act()[0]; lv.append(e.rb(bm.VLVL + v))
+    print('ENV DECAY %d ms SUSTAIN %d: level per 100 ms %s (target %d -> half)' % (bm.DEC_MS[e.rb(bm.KDEC)], e.rb(bm.KSUS), lv,
+          e.rb(bm.VSUS + v) * 2))
+    sim.pad(7, False); sim.run(600)
+    sim.knobs[6] = 40; sim.run(30); base = cf('flt_f1')        # filter on
+    sim.key(bm.K_DOWN); sim.key(bm.K_DOWN)
+    for _ in range(8): sim.key(bm.K_RIGHT)                     # FLT ENV 8 (FLT DEC 400 ms)
+    sim.pad(7); fe = []
+    for ms in (5, 95, 200, 300): sim.run(ms); fe.append((e.rb(bm.KFE_CUR), cf('flt_f1')))
+    print('filter env: base f1 %d; (env, f1) at 5/100/300/600 ms %s (expect 64 -> 0, back to the base)' % (base, fe))
+    sim.pad(7, False); sim.run(400)
+    for _ in range(8): sim.key(bm.K_LEFT)                      # FLT ENV 0
+    sim.key(bm.K_UP); sim.key(bm.K_UP)
+    for _ in range(8): sim.key(bm.K_RIGHT)                     # SUSTAIN 16
+    sim.key(bm.K_UP)
+    for _ in range(7): sim.key(bm.K_LEFT)                      # DECAY off
+    sim.knobs[6] = 127; sim.run(30)
+    sim.key(bm.K_ENTER); sim.key(bm.K_UP); sim.key(bm.K_UP); sim.key(bm.K_ENTER); sim.run(10)   # menu: ENV -> OSC
+    sim.key(bm.K_DOWN)
+    for _ in range(16): sim.key(bm.K_LEFT)                     # SAW 0
+    print('v1.9 restored: tab %d SAW %d LA %d DECAY %d SUS %d FENV %d wet %d' % (e.rb(bm.KDTAB), e.rb(bm.KMXSAW), e.rb(bm.KLAA),
+          e.rb(bm.KDEC), e.rb(bm.KSUS), e.rb(bm.KFENV), cf('flt_wet')))
     sim.key(bm.K_EXIT); sim.run(10); print('EXIT -> page %d CUR %d' % (e.rb(bm.PAGE), e.rb(bm.CUR)))
     sim.key(bm.K_LEFT)
     sim.key(bm.K_LEFT); sim.key(bm.K_ENTER); sim.run(20)                     # back to KEYS

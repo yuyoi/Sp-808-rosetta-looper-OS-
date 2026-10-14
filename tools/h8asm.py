@@ -158,7 +158,10 @@ class Asm:
                 out += bytes((0x55 if c is None else 0x40 | c, d & 0xFF)); pc += 2
             elif k == 'br16':
                 c, lbl = p; d = self.labels[lbl] - (pc + 4)
-                assert -32768 <= d <= 32767
+                if not -32768 <= d <= 32767 and c in (None, 0):  # bsr / bra out of reach: jsr / jmp @aa:24, same 4 bytes
+                    out += bytes((0x5E if c is None else 0x5A,)) + self.labels[lbl].to_bytes(3, 'big'); pc += 4
+                    continue
+                assert -32768 <= d <= 32767, 'branch16 to %s out of range (%d)' % (lbl, d)
                 out += (bytes((0x5C, 0x00)) if c is None else bytes((0x58, c << 4))) + struct.pack('>h', d); pc += 4
             elif k == 'abs32':
                 out += struct.pack('>I', self.labels[p]); pc += 4

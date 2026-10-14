@@ -249,6 +249,23 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.9 (1190, 2026-10-14): DDS-DSP tabs OSC / LA / ENV (host only, no DSP words)
+- User picked LA + ENV and LFO first, DDS before Looper v2 (and will test the old looper meanwhile).
+- **Tabs:** ENTER cycles OSC / LA / ENV (title row, current tab inverted), UP/DOWN pick, dial / LEFT / RIGHT change.
+- **LA** (D-50 style, sampled attack + synth sustain): TIME (sample time after the note start, 0 = off), FADE (fade-out
+  length), SAMPLE. With LA on a note never ends with the sample (VEND = never, no loop handoff): after TIME the
+  voice's own mxs coefficient ramps SAMPLE x 4 -> 0 over FADE (host, written when the value changes); at the sample's
+  end (VSEND, the old VEND) it is cut to 0 anyway, so the oscillators carry the note. VLAS per voice (1 fading, 2 out);
+  la_reset restores mxs when a voice is reused (note-on, loop continuation); dds_ap0 skips voices LA owns.
+- **ENV:** ATTACK (= S-EDIT knob C), DECAY (0 = off, time for a full-scale drop), SUSTAIN 0-16 (VSUS = velocity level x
+  SUSTAIN / 16), RELEASE (= S-EDIT), FLT ENV 0-16 (x 8 cutoff-knob units on top of knob A), FLT DEC. Decay steps
+  VTGT (and VLVL in state 2) down to VSUS every DEC_PER ms (states 2 and 6, so a loop handoff fades in to the decayed
+  level; kl_prep carries VSUS). The filter is one SVF on the voice sum, so its envelope restarts on every note-on
+  (paraphonic): cutoff = knob A + env, written through keys_cut_env (frequency words only) when it changes; knob A
+  127 (filter off) disables it.
+- Code passed 32 KB: h8asm now turns an out-of-range bsr16 / bra16 into jsr / jmp @aa:24 (same 4 bytes); the draw
+  dispatcher's conditional branch to lp_draw goes through a jmp.
+
 ### v1.82 (1182, 2026-10-14): DDS-DSP labels, POLY on the 7-segment line
 - User: keep the mixer (every wave its own level) and the DDS-DSP name, clearer labels: PULSE -> SQUARE, PW -> WIDTH,
   UNISON -> SAW2 (the page is a per-voice source mixer, not slots).
