@@ -35,6 +35,14 @@ class KeysSim(test_v09.Sim):
             if not k & 0x4000: e.s16(0, k & 15); self.note_on_stub(e)
             e.s16(0, 1)
         s[bm.STOCK_G1] = stock_pad; s[bm.STOCK_G8] = lambda e: e.s16(0, 0)
+        s[0x13EFF0] = lambda e: None                         # stock "ignore" MIDI handler
+        self.banks = {}
+        def bank_switch(e):                                  # stock 0x137B5A: save the bank, load the new one, wait
+            nb, ob = e.g16(0) & 0xFF, e.rb(bm.CUR_BANK)
+            self.banks[ob] = self.pads
+            self.pads = self.banks.get(nb) or {p: bytearray(test_v09.EMPTY) for p in range(16)}
+            e.wb(bm.CUR_BANK, nb); self.log.append((round(self.t, 1), 'bank', nb))
+        s[bm.BANK_SWITCH] = bank_switch
         e.wb(bm.FX_ROUTE_CODE, 0x01)                         # stock: send/return
         for p in range(16): self.pads[p] = bytearray(test_v09.EMPTY)
         import struct
@@ -116,10 +124,9 @@ def main(image_path, out):
     print('enter    ', sim.kstate(), 'loaded', e.rb(bm.KLOADED), 'log', sim.dsp_log[0], '... %d writes' % len(sim.dsp_log),
           'routing', sim.routing)
     shots.append(('KEYS idle', sim.shot()))
-    sim.key(bm.K_RIGHT); sim.key(bm.K_RIGHT); sim.run(5)      # source pad 3
-    print('src pad  ', e.rb(bm.KSRC) + 1)
     n0 = len(sim.dsp_log)
-    sim.key(bm.K_ENTER); sim.run(20)
+    sim.pad(2); sim.pad(2, False); sim.run(20)                # hitting pad 3 takes it onto the keys
+    print('src pad  ', e.rb(bm.KSRC) + 1, 'bank', e.rb(bm.KBANK) + 1)
     print('sample   ', sim.kstate(), 'pad on at', [x for x in sim.log if x[1] == 'on'][-1], 'writes', sim.dsp_log[n0:n0 + 3])
     sim.run(60); print('onset    ', sim.kstate(), 't=%.0f' % sim.t, 'hostreg %06X' % (sim.core.hostreg & 0xFFFFFF))
     shots.append(('SAMPLING', sim.shot()))
@@ -137,7 +144,7 @@ def main(image_path, out):
         ratio = 2 ** ((p - bm.KEYS_ROOT) / 12)
         print('pad %2d %-4s voices %s  f = %7.1f Hz (expect %7.1f) peak %.3f  after release: %s' % (
             p + 1, name, st, f, 1000 * ratio, pk, [e.rb(bm.VSTATE + v) for v in range(bm.NV)]))
-    sim.pad(7); sim.pad(14); sim.run(5); shots.append(('2 notes', sim.shot())); sim.run(100)
+    sim.pad(7); sim.pad(14); sim.run(40); shots.append(('2 notes', sim.shot())); sim.run(100)
     sim.out = []; sim.run(100); f, pk = freq(sim.out); print('chord     peak %.3f' % pk)
     sim.pad(7, False); sim.pad(14, False); sim.run(50)
     # MIDI keyboard through the stock parser's handler table: note 72 = +12, velocity, release ramp
@@ -154,10 +161,38 @@ def main(image_path, out):
         sim.out = []; sim.run(100); pks.append('%.3f' % freq(sim.out)[1])
     print('release 500ms: peak per 100 ms after note off', pks, 'states', [e.rb(bm.VSTATE + v) for v in range(bm.NV)])
     shots.append(('MIDI', sim.shot()))
+    # the real path: raw bytes through the stock parser (status 0x134B0A -> handler table -> our trampolines)
+    def midi_bytes(*bs):
+        for b in bs: sim.call(0x134B0A if b & 0x80 else 0x134BFE, b)
+    sim.call(0x134C52, 0)                                     # stock parser reset (handler pointers = ignore)
+    midi_bytes(0x93, 72, 100); sim.run(6)                     # note-on, channel 4
+    vp = [e.rb(bm.VPAD + v) for v in range(bm.NV)]; vs = [e.rb(bm.VSTATE + v) for v in range(bm.NV)]
+    midi_bytes(72, 0); sim.run(6)                             # running status, velocity 0 = off
+    print('stock parser: note 72 ch4 -> key %s, states %s; vel 0 off -> %s' % (
+        36 in vp, vs, [e.rb(bm.VSTATE + v) for v in range(bm.NV)]))
     midi(10, 127); midi(120, 127); sim.run(5)
     print('out-of-range notes ignored:', e.rb(bm.MWR) == e.rb(bm.MRD), ' states', [e.rb(bm.VSTATE + v) for v in range(bm.NV)])
     sim.key(bm.K_RIGHT); sim.key(bm.K_RIGHT); sim.run(5); print('dial in PLAY: REL ->', e.rb(bm.KREL), 'src pad still', e.rb(bm.KSRC) + 1)
     sim.key(bm.K_UP); sim.run(5); print('UP in PLAY: src pad ->', e.rb(bm.KSRC) + 1)
+    shots.append(('PLAY src', sim.shot()))
+    sim.pad(7); sim.run(10)                                   # a note is sounding when SHIFT+EXIT comes
+    sim.key(bm.K_SH_EXIT); sim.run(5)
+    print('SHIFT+EXIT', sim.kstate(), 'voices', [e.rb(bm.VSTATE + v) for v in range(bm.NV)], 'page', e.rb(bm.PAGE) == bm.P_KEYS)
+    shots.append(('re-pick', sim.shot()))
+    sim.pad(4); sim.pad(4, False); sim.run(50); print('hit empty pad 5 ->', sim.kstate())
+    import struct
+    other = {p: bytearray(test_v09.EMPTY) for p in range(16)}
+    other[5] = bytearray(struct.pack('>IIIHBB', 100000, 100000 + int(0.4 * FS / 16), 100000, 9, 0x05, 100) + bytes(16))
+    sim.banks[4] = other                                      # bank 5, pad 6 holds a 0.4 s sample
+    for _ in range(4): sim.key(bm.K_RIGHT)
+    sim.run(5); print('dial x4 -> bank', e.rb(bm.KBANK) + 1, '(machine still on', e.rb(bm.CUR_BANK) + 1, ')')
+    shots.append(('pick bank 5', sim.shot()))
+    sim.pad(5); sim.pad(5, False); sim.run(900)
+    print('hit pad 6 ->', sim.kstate(), 'machine bank', e.rb(bm.CUR_BANK) + 1, 'rec ms', e.rl(bm.KREC_MS),
+          [x for x in sim.log if x[1] in ('bank', 'on')][-2:])
+    sim.out = []; sim.pad(7); sim.run(200); ys = list(sim.out)
+    f, pk = freq(ys); sim.pad(7, False); sim.run(30)
+    print('new sample on the keys: f = %.1f Hz peak %.3f' % (f, pk))
     sim.key(bm.K_EXIT); sim.run(10)
     print('exit      page', e.rb(bm.PAGE), 'routing calls', sim.routing, 'route code %02X' % e.rb(bm.FX_ROUTE_CODE))
     print(ui_gfx.render(shots, out))
