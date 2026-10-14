@@ -123,6 +123,7 @@ def main(image_path, out):
     sim = KeysSim(open(image_path, 'rb').read(), bm.build()[1])
     e, shots = sim.e, []
     e.wb(bm.KTHRU, 1)                                        # as the boot RAM init (not run here) sets it
+    for v_, val_ in ((bm.KMXS, 16), (bm.KPW, 8), (bm.KDET, 2), (bm.KOCT, 2)): e.wb(v_, val_)
     e.wb(bm.PAGE, bm.P_HOME); sim.call('menu', 0); sim.run(5)
     sim.key(bm.K_SYSTEM); sim.run(30)                        # SYSTEM = KEYS page: program load + routing
     print('enter    ', sim.kstate(), 'loaded', e.rb(bm.KLOADED), 'log', sim.dsp_log[0], '... %d writes' % len(sim.dsp_log),
@@ -292,7 +293,43 @@ def main(image_path, out):
     sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.run(20)                     # reverse off, cursor back on LOOP
     sim.key(bm.K_ENTER); sim.run(20); print('LOOP off: KLOOP', e.rb(bm.KLOOP))
     sim.key(bm.K_EXIT); sim.run(10); print('EXIT -> page', e.rb(bm.PAGE), 'active', e.rb(bm.KACTIVE), 'gate', e.rb(bm.KGATE), 'CUR', e.rb(bm.CUR))
-    sim.key(bm.K_RIGHT); sim.run(5); shots.append(('home scrolled', sim.shot())); sim.key(bm.K_LEFT)
+    sim.key(bm.K_RIGHT); sim.run(5); shots.append(('home scrolled', sim.shot()))
+    # ---- v1.8: DDS-DSP (oscillators per voice) ----
+    sim.key(bm.K_ENTER); sim.run(20)
+    print('DDS-DSP tile -> page %d active %d state %s' % (e.rb(bm.PAGE), e.rb(bm.KACTIVE), sim.kstate()))
+    for _ in range(16): sim.key(bm.K_LEFT)                     # SAMPLE 16 -> 0
+    sim.key(bm.K_DOWN)
+    for _ in range(16): sim.key(bm.K_RIGHT)                    # SAW 0 -> 16
+    sim.run(20); shots.append(('DDS-DSP', sim.shot()))
+    print('SAMPLE %d SAW %d: v0 mxs %d mxsaw %d, v7 mxsaw %d' % (e.rb(bm.KMXS), e.rb(bm.KMXSAW), cf('v0_mxs'), cf('v0_mxsaw'), cf('v7_mxsaw')))
+    sim.out = []; sim.pad(7); sim.run(1000)                    # root pad held 1 s (the take is 439 ms)
+    st = [e.rb(bm.VSTATE + v) for v in range(bm.NV)]
+    f, pk = freq(sim.out[-22000:])
+    print('saw, pad 8 held 1 s: f = %.1f Hz (expect 261.6, C4) peak %.3f states %s (sustains past the take)' % (f, pk, st))
+    sim.pad(7, False); sim.run(400); print('  released:', [e.rb(bm.VSTATE + v) for v in range(bm.NV)])
+    for _ in range(2): sim.key(bm.K_DOWN)                      # -> PW
+    for _ in range(4): sim.key(bm.K_RIGHT)                     # PW 8 -> 12 (75 %)
+    sim.key(bm.K_DOWN); sim.key(bm.K_DOWN)                     # -> UNISON
+    for _ in range(8): sim.key(bm.K_RIGHT)
+    sim.key(bm.K_DOWN)                                         # -> DETUNE
+    for _ in range(2): sim.key(bm.K_RIGHT)                     # 2 -> 4 (25 cents)
+    sim.run(20); shots.append(('DDS-DSP 2', sim.shot()))
+    print('PW %d (v0 pw coef %d) UNISON %d (v3 mxuni %d) DETUNE %d' % (e.rb(bm.KPW), sim.prog[W('v0_pw')] & 0xFF,
+          e.rb(bm.KMXUNI), cf('v3_mxuni'), e.rb(bm.KDET)))
+    sim.out = []; sim.pad(14); sim.run(600)                    # +7 semitones, saw + detuned unison saw
+    o = [sim.prog[W('v%d_o2%s' % (v, ab))] & 0xFF for v in range(bm.NV) for ab in 'ab']
+    f, pk = freq(sim.out[-13000:])
+    print('pad 15 (+7) saw + unison: f = %.1f Hz (expect 392.0) peak %.3f; o2 fields a/b per voice %s' % (f, pk, o))
+    sim.pad(14, False); sim.run(400)
+    for _ in range(7): sim.key(bm.K_UP)                        # back to SAMPLE
+    for _ in range(16): sim.key(bm.K_RIGHT)
+    sim.key(bm.K_DOWN)
+    for _ in range(16): sim.key(bm.K_LEFT)                     # SAW 0 again
+    for _ in range(4): sim.key(bm.K_DOWN)
+    for _ in range(8): sim.key(bm.K_LEFT)                      # UNISON 0
+    print('restored: SAMPLE %d SAW %d UNISON %d' % (e.rb(bm.KMXS), e.rb(bm.KMXSAW), e.rb(bm.KMXUNI)))
+    sim.key(bm.K_EXIT); sim.run(10); print('EXIT -> page %d CUR %d' % (e.rb(bm.PAGE), e.rb(bm.CUR)))
+    sim.key(bm.K_LEFT)
     sim.key(bm.K_LEFT); sim.key(bm.K_ENTER); sim.run(20)                     # back to KEYS
     # leaving KEYS without EXIT (mode keys): the master routing must come back, KEYS re-arms on return
     sim.key(bm.K_SAMPLE); sim.run(10)

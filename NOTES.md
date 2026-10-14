@@ -249,6 +249,27 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.8 (1180, 2026-10-14): DDS-DSP, oscillators in every KEYS voice
+- v1.72 confirmed on hw ("works now"; one hang once after fast chords, didn't come back). Pushed (90ab838).
+- **New home tile DDS-DSP** (page P_DDS = 5, after S-EDIT; 6 tiles, the home view scrolls so the cursor stays on
+  screen). KEYS stays live there (pads, MIDI, PAD BANK, knobs). Items, 2 columns x 4 rows, UP/DOWN + dial:
+  SAMPLE 0-16, SAW 0-16, PULSE 0-16, PW 6-94 %, TRI 0-16, UNISON 0-16 (detuned 2nd saw), DETUNE 0-94 cents
+  (1/16 semitone steps), OCT -2..+2. Levels x4 -> SH6 coefficients (16 = 1.0). SAMPLE 0 = synth only: notes hold
+  while the key is held (no sample end, no loop handoffs).
+- **DSP voice block 44 -> 57 words** (voices 0x100-0x2C7). Oscillator 1 = a raw 24-bit phase (the saw itself):
+  increment = o2 * 32768 + o1 * 512 + o0 * 8 per sample (constants 0x400000 / 0x10000 / 0x400 with SH7), host
+  table osc_tab (MIDI 12-121 in 1/16 semitones, 3 bytes). Pulse = sat(sat((saw + pw) * 15.9) * 15.9), edge
+  1/252 of a cycle; triangle = 2|saw| - 1 (op 0x7C abs). Oscillator 2 = the unison saw, detuned by DETUNE steps.
+  The sample interpolation moved from A to B (op30 acc_b) so A could run the oscillators; the mix is in B:
+  B = sat(sample) * SAMPLE (op 0x1C store + reload) + saw + pulse + tri + unison, then SMP -> x level (mc2).
+  An 'fm' word (unison saw of the last sample into osc 1's phase) is in place, coefficient 0 (FM = v2.0).
+  Shared temps TRI/PUL/JUNK at 0xC0/0xC2/0xC4, OPH1/OPH2 per voice at 0xA0 + 4v. ERAM reads unchanged (rdA +17,
+  rdB +23); the FC/FD latches are read at +31/+36 (any time before the next commit).
+- Model: saw / pulse 50 % / pulse 75 % / triangle all at 261.6 Hz (C4 on pad 8), unison +12.5 c beats at the right
+  rate, the sample path gives the same numbers as before.
+- Host: keys_osc_note (note-on and loop continuations) writes both oscillators' 3 fields; dds_apN write one item to
+  all 8 voices (only while KEYS owns DSP1); keys_load re-applies them after a program load.
+
 ### v1.72 (1172, 2026-10-14): PAD BANK inside KEYS, idle voices hard-muted, keys +6 dB
 - **Hw v1.71:** background much lower but still there; it's "a mix of notes" looping every 1-3 s, THRU off doesn't
   change it -> not the pass-through. Roland's DSP1 base (58 words) has no ERAM access, the loader writes all 708

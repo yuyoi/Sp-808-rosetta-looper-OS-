@@ -22,12 +22,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import esp
 
 NVOICES = 8
-G0, V0, VSTRIDE = 0x3C, 0x100, 44
+G0, V0, VSTRIDE = 0x3C, 0x100, 57
 # IRAM slots (relative addresses; a state value written at m is read next sample at m + 1 -> pairs)
 AGE, REC, PK, T1 = 0x20, 0x22, 0x24, 0x26
 AGE_E, REF = 0x28, 0x2A                                 # age since the take's END (reverse); the voices' read reference
 VS, LP, BP, HP = 0x90, 0x92, 0x94, 0x96                 # voice sum (filter input), state-variable filter lp / bp / hp
 MIXF = 0x98                                             # the voices' output (filtered or dry), for the R channel
+OSC0 = 0xA0                                             # per voice: OPH1 (osc 1 phase) at OSC0 + 4v, OPH2 (unison) + 2
+TRI, PUL, JUNK = 0xC0, 0xC2, 0xC4                       # shared temps: osc 1 triangle / pulse, write-only side stores
 SOFF = 0x2C                                             # loop start offset (16.8, raw): a voice with sel on starts there
 G1 = 0x50                                               # second global block: AGE_E, REF, the filter (before the voices)
 def vslot(v, k): return 0x30 + 12 * v + 2 * k          # per voice: PHI, LVL, NX, SMP, OUT, S1/S2 (head temps)
@@ -120,12 +122,13 @@ def build(nvoices=NVOICES):
     for v in range(nvoices):
         b = V0 + VSTRIDE * v
         phi, lvl, nx, smp, out = (vslot(v, k) for k in (PHI, LVL, NX, SMP, OUT))
+        o1, o2 = OSC0 + 4 * v, OSC0 + 4 * v + 2
         mck = 2                                                # level mulcoeff: mc2 for every voice. The FX core (DSP1)
                                                                # has no general mc3: Roland's 20 FX programs only write
                                                                # mc0-mc2; odd voices on mc3 played at random levels on hw
         # level in B (saturating), phase in A: stored RAW so it wraps like AGE (a saturating store froze every note
         # after 32767 source samples = 0.74 s; the wrap keeps X = REF - PHI right for the whole 1.48 s take)
-        put(b + 0, E(0x14, lvl + 1, SH6, 63), 'v%d_lvlk' % v)   # B = L_old * 63/64
+        put(b + 0, E(0x14, lvl + 1, SH6, 63), 'v%d_lvlk' % v)   # B = L_old * 63/64      (idle voice: 0 = hard mute)
         put(b + 1, E(0x10, 3, SH7, 0), 'v%d_t' % v)             # B += 0x10000 * t >> 7 = t * 512 (target / 64)
         put(b + 2, E(0x04, phi + 1, SH6, 64), 'v%d_g' % v)      # A = PHI_old * 1    (0 = reset)
         put(b + 3, E(0x00, 3, SH7, 0), 'v%d_d2' % v)            # A += c2 * 512
@@ -137,19 +140,45 @@ def build(nvoices=NVOICES):
         put(b + 10, E(0x00, REF, SH6, -64 & 0xFF))              # A -= REF
         put(b + 11, E(0x00, SOFF, SH6, 0), 'v%d_sel' % v)       # A += SOFF * sel (loop continuation: +64 fwd / -64 rev)
         put(b + 14, E(0x44, nx, SH3, -128 & 0xFF))              # i[NX] = raw(A(+11)) = -X; A = -X * -16 = 16 X
+        # ---- DDS oscillator 1: a raw 24-bit phase = the saw; pulse = saw + pw driven into saturation twice (x252);
+        #      triangle = 2|saw| - 1. A is free once the ERAM start at +17 has taken A(+14).
+        put(b + 15, E(0x04, o1 + 1, SH6, 64), 'v%d_og' % v)     # A = OPH1_old * 1
+        put(b + 16, E(0x00, 4, SH7, 0), 'v%d_o2a' % v)          # A += o2 * 32768
         put(b + 17, E(0x34, 0xC7, SH7, 0) | (0x18 << 23), 'v%d_rdA' % v, 'eram')   # eramvar = A(+14); READvar (+0)
-        put(b + 23, 0x18 << 23, 'v%d_rdB' % v, 'eram')          # READvar start #2, imm 2 (+1 sample)
-        put(b + 24, 0x02 << 23)
-        put(b + 27, E(0x34, 0xCC, SH7, 0))                      # i[FC] = eramrd  (read A, start + 10)
-        put(b + 28, op30(6, flip=True, clear=True, mem=0xFC))   # A = i[FC] * (1 - frac)
-        put(b + 29, dmac())
-        put(b + 33, E(0x34, 0xCD, SH7, 0))                      # i[FD] = eramrd  (read B, start + 10)
-        put(b + 34, op30(6, clear=False, mem=0xFD))             # A += i[FD] * frac
-        put(b + 35, dmac())                                     # -> A = interpolated sample
-        put(b + 38, E(0x58, smp, SH7, 0))                       # i[SMP] = sat(A(+35))
-        put(b + 39, op30(mck, acc_b=True, clear=True, mem=smp)) # B = sample * L
-        put(b + 40, dmac(acc_b=True))
-        put(b + 43, E(0x1C, out, SH7, 0))                       # i[OUT] = sat(B(+40)); B cleared
+        put(b + 18, E(0x00, 3, SH7, 0), 'v%d_o1a' % v)          # A += o1 * 512
+        put(b + 19, E(0x00, 2, SH7, 0), 'v%d_o0a' % v)          # A += o0 * 8
+        put(b + 20, E(0x00, o2 + 1, SH6, 0), 'v%d_fm' % v)      # A += unison saw (last sample) * fm (phase mod, later)
+        put(b + 23, E(0x44, o1, SH6, 64) | (0x18 << 23), 'v%d_rdB' % v, 'eram')   # i[OPH1] = raw(A(+20)); A = saw;
+                                                                # READvar start #2 (imm 2 = +1 sample)
+        put(b + 24, E(0x00, 4, SH6, 0) | (0x02 << 23), 'v%d_pw' % v)   # A += pw * 65536 (pulse width)
+        put(b + 26, E(0x7C, JUNK, SH6, 127))                    # A = |saw (A(+23))| * 127/64
+        put(b + 27, E(0x18, JUNK, SH3, 127))                    # B = sat(saw + pw (A(+24))) * 15.9
+        put(b + 29, E(0x00, 4, SH6, -128 & 0xFF))               # A -= 0x800000                    -> triangle
+        put(b + 30, E(0x1C, JUNK, SH3, 127))                    # B = sat(B(+27)) * 15.9
+        put(b + 31, E(0x34, 0xCC, SH7, 0))                      # i[FC] = eramrd (read A, committed at +27)
+        put(b + 32, E(0x58, TRI, SH7, 0))                       # i[TRI] = sat(A(+29))
+        put(b + 33, E(0x1C, PUL, SH7, 0))                       # i[PUL] = sat(B(+30)) = pulse; B = 0
+        # ---- the sample, interpolated, now in B ----
+        put(b + 34, op30(6, acc_b=True, flip=True, clear=True, mem=0xFC))   # B = i[FC] * (1 - frac)
+        put(b + 35, dmac(acc_b=True))
+        put(b + 36, E(0x34, 0xCD, SH7, 0))                      # i[FD] = eramrd (read B, committed at +33)
+        put(b + 37, op30(6, acc_b=True, clear=False, mem=0xFD)) # B += i[FD] * frac
+        put(b + 38, dmac(acc_b=True))                           # -> B = interpolated sample
+        # ---- DDS oscillator 2 (unison saw, detuned by the host) in A; the mix in B ----
+        put(b + 39, E(0x04, o2 + 1, SH6, 64), 'v%d_og2' % v)    # A = OPH2_old * 1
+        put(b + 40, E(0x00, 4, SH7, 0), 'v%d_o2b' % v)
+        put(b + 41, E(0x1C, JUNK, SH6, 64), 'v%d_mxs' % v)      # B = sat(sample (B(+38))) * sample level
+        put(b + 42, E(0x00, 3, SH7, 0), 'v%d_o1b' % v)
+        put(b + 43, E(0x00, 2, SH7, 0), 'v%d_o0b' % v)
+        put(b + 44, E(0x10, o1, SH6, 0), 'v%d_mxsaw' % v)       # B += saw * level
+        put(b + 45, E(0x10, PUL, SH6, 0), 'v%d_mxpul' % v)      # B += pulse * level
+        put(b + 46, E(0x40, o2, SH7, 0))                        # i[OPH2] = raw(A(+43))
+        put(b + 47, E(0x10, TRI, SH6, 0), 'v%d_mxtri' % v)      # B += triangle * level
+        put(b + 48, E(0x10, o2, SH6, 0), 'v%d_mxuni' % v)       # B += unison saw * level
+        put(b + 51, E(0x1C, smp, SH7, 0))                       # i[SMP] = sat(B(+48)); B = 0
+        put(b + 52, op30(mck, acc_b=True, clear=True, mem=smp)) # B = SMP * L
+        put(b + 53, dmac(acc_b=True))
+        put(b + 56, E(0x1C, out, SH7, 0))                       # i[OUT] = sat(B(+53)); B cleared
         outs.append(out)
     end = V0 + VSTRIDE * nvoices
     assert end <= 0x2F2 and all(w == 0 for w in prog[0xF1:0x100]), 'program layout'
@@ -167,6 +196,13 @@ def filt_f(k):
     f = 2 * math.sin(math.pi * cutoff_hz(k) / FS)          # Chamberlin f, SH7: value = (hi + lo/128) / 128
     v = max(1, min(127 * 128 + 127, round(f * 128 * 128)))
     return v >> 7, v & 0x7F
+def osc_fields(f):
+    """oscillator frequency (Hz) -> (o2, o1, o0): phase increment per sample = o2 * 32768 + o1 * 512 + o0 * 8 of 2^24."""
+    inc = int(round(f / FS * (1 << 24)))
+    o2, r = divmod(inc, 32768); o1, r = divmod(r, 512)
+    assert o2 <= 127, f
+    return o2, o1, r // 8
+def osc_freq(o2, o1, o0): return (o2 * 32768 + o1 * 512 + o0 * 8) * FS / (1 << 24)
 def soff_fields(samples):
     """loop start in samples (0..65535.5) -> (a, b, c) with a * 2048 + b * 32 + c / 2 = samples; all in 0..127."""
     h = int(round(samples * 2))
