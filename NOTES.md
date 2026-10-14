@@ -267,6 +267,8 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   BUTTONS = the last key event, its name from the factory SW CHECK table, the code, UP on release.
   LED SHOW = every LED one at a time (</> step, UP = chase every 90 ms, DOWN = stop) with its factory name and code;
   each LED's own state is put back when it is left (and on leaving the tab / page).
+  LCD ICONS = the 7-segment line's 184 bits that no digit uses, one at a time (</>, with row / word / bit) or all at
+  once (UP): if the glass has hidden icons they light up; the line is put back on leaving.
 - **KEYS: sample + oscillators**: with SAMPLE and any oscillator on (LA off, loop off) a held note no longer stops at
   the sample end: the sample is cut there (the LA cut, VLAT = VSEND) and the oscillators hold the note. (Found by the
   suite: ENV DECAY/SUSTAIN with SAW + SAMPLE ended at the 439 ms take.)
@@ -303,7 +305,12 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   colours?, F4 / C4-C9 / 30-31 = LED-only). API: 0x132866(code) on, 0x132880(code) off, 0x13289A / 0x1328E0 /
   0x1328FC / 0x132934 / 0x132944 = blink variants (masks 0x4273B0 / 0x4273D0); state bits 0x427390 + 2 * (code >> 4),
   bit mask table 0x16464E[code & 15]; 0x13268C + 0x132564 push a row to the hardware. Factory list: 0x15F91E.
-  Ideas: KEYS voices on the pad LEDs, a VU meter on the pads, MFX slots on the EFX LEDs, a boot light show.
+  Ideas: KEYS voices on the pad LEDs (done in v1.91), a VU meter on the pads, MFX slots on the EFX LEDs, a boot
+  light show.
+- **7-segment line = 2 rows x 12 LCD words** (row 0 at 0x40187A, row 1 at 0x401892, cleared by boot 0xA258, written
+  by boot 0xA27C = API 0x4003E4). 25 digits in 4-bit groups: type 0 bits 13-10, type 1 bits 9-8 + 5-4, type 2 bits
+  3-0 (types 0xA226, word offsets 0xA23F). Word 11 of both rows and bits 15-14 / 7-6 / 3-0 elsewhere are never
+  written by a digit: 184 free bits = candidate icons (LAB LCD ICONS lights them on the unit).
 - Mixer levels: 100 = the OS's nominal level (it writes 100 for master / input / tracks), 127 = about +6 dB over it
   (coefficient 63>>3 vs ~4.0), 64 = about -10 dB.
 

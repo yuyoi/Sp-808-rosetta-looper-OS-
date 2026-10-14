@@ -107,7 +107,24 @@ def main(image_path, out):
     print('chase 400 ms -> LED', e.rb(bm.LEDIX), '(expect about 5-6)')
     shots.append(('LED SHOW: chase', sim.shot()))
     sim.key(bm.K_DOWN); sim.key(bm.K_LEFT); sim.key(bm.K_LEFT); sim.run(5)
+    # ---- LAB: LCD ICONS (the 7-segment line's free bits) ----
+    line = lambda: [e.rw(bm.SEG_ROW0 + 2 * w) for w in range(12)] + [e.rw(bm.SEG_ROW1 + 2 * w) for w in range(12)]
+    for w in range(12): e.ww(bm.SEG_ROW0 + 2 * w, 0x1234 & ~bm.SEG_FREE[w][2])      # some digits shown
+    seg0 = line()
+    sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(10)
+    lit = [(i, x ^ y) for i, (x, y) in enumerate(zip(seg0, line())) if x != y]
+    print('LCD ICONS  tab', e.rb(bm.LTAB), 'lit (word, bits)', [(i, hex(v)) for i, v in lit], 'expect bit 15 of word 0')
+    shots.append(('LCD ICONS: bit 1', sim.shot()))
+    for _ in range(9): sim.key(bm.K_RIGHT)
+    lit = [(i, x ^ y) for i, (x, y) in enumerate(zip(seg0, line())) if x != y]
+    print('RIGHT x9   SGI', e.rb(bm.SGI), bm.SEG_FREEBITS[e.rb(bm.SGI)], 'lit', [(i, hex(v)) for i, v in lit])
+    shots.append(('LCD ICONS: bit 10', sim.shot()))
+    sim.key(bm.K_UP); sim.run(5)
+    n_on = sum(bin(x ^ y).count('1') for x, y in zip(seg0, line()))
+    print('UP = ALL   bits changed', n_on, '(of %d free; the 0x1234 digits had none of them)' % len(bm.SEG_FREEBITS))
+    shots.append(('LCD ICONS: all', sim.shot()))
     sim.key(bm.K_EXIT); sim.run(20)
+    print('EXIT       7-seg line restored:', line() == seg0, 'SGLIT', e.rb(bm.SGLIT))
     after = [e.rw(bm.LED_ROWS + 2 * r) for r in range(16)]
     print('EXIT       page', e.rb(bm.PAGE), 'LED rows restored:', before == after, 'lit', e.rb(bm.LEDON))
     print(ui_gfx.render(shots, out))

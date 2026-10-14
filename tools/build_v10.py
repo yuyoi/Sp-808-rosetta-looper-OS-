@@ -423,7 +423,19 @@ LKEYW, LABT = RAM_BASE + 0x428, RAM_BASE + 0x42C
 ADC_TAB, ADC_N, SWNAMES, SWCODES, SW_N = 0x426CBE, 14, 0x15F9E8, 0x16414C, 67
 LAB_CH_NAMES = ['FADER A', 'FADER B', 'FADER C', 'FADER D', 'FADER 5?', 'FADER 6?', 'PARA-A', 'PARA-B', 'PARA-C',
                 'BEAM L', 'BEAM R', 'FOOT SW', '', '']                    # (CONTROLS.md; 4/5/12/13 to confirm on hw)
-LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt'), ('LED SHOW', 'lab_ld')]
+LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt'), ('LED SHOW', 'lab_ld'), ('LCD ICONS', 'lab_sg')]
+# LCD ICONS: the 7-segment line = 2 rows x 12 words in the boot ROM's LCD RAM (row 0 at 0x40187A, row 1 at 0x401892,
+# streamed by the LCD interrupt). 25 digits use 4-bit groups (type 0 bits 13-10, type 1 bits 9-8 + 5-4, type 2 bits
+# 3-0; boot ROM tables 0xA226 types / 0xA23F word offsets); the other 184 bits are never written by a digit: hidden
+# icons, if the glass has any. The tab lights them one at a time (or all), the line is put back on leaving.
+SEG_ROW0, SEG_ROW1 = 0x40187A, 0x401892
+_SEG_TYPES = [0, 1, 1, 2, 0, 1, 1, 2, 0, 1, 1, 2, 0, 1, 2, 0, 1, 2, 2, 0, 1, 2, 0, 1, 2]
+_SEG_OFFS = [0, 0, 2, 2, 4, 4, 6, 6, 8, 8, 10, 10, 12, 12, 12, 14, 14, 14, 16, 18, 18, 18, 20, 20, 20]
+_used = {}
+for _t, _o in zip(_SEG_TYPES, _SEG_OFFS): _used[_o] = _used.get(_o, 0) | {0: 0x3C00, 1: 0x0330, 2: 0x000F}[_t]
+SEG_FREE = [(row, w, ~_used.get(2 * w, 0) & 0xFFFF) for row in (0, 1) for w in range(12)]          # per word
+SEG_FREEBITS = [(row, w, b) for row, w, f in SEG_FREE for b in range(15, -1, -1) if f >> b & 1]     # 184 bits
+SGI, SGMODE, SGLIT, SGTMP, SGSNAP = RAM_BASE + 0x456, RAM_BASE + 0x457, RAM_BASE + 0x458, RAM_BASE + 0x459, RAM_BASE + 0x460
 # LEDs: Roland's API 0x132866(code) on / 0x132880(code) off; state bits at 0x427390 + 2 * (code >> 4), mask from the
 # word table 0x16464E[code & 15]. The factory LED CHECK's list (0x15F91E) without its zero entries = every LED.
 LED_ON, LED_OFF, LED_ROWS, LED_MASKS = 0x132866, 0x132880, 0x427390, 0x16464E
@@ -2648,19 +2660,76 @@ def build():
         a.and_b_imm(15, 'r0l'); a.add_b_imm(0x30, 'r0l'); a.cmp_b_imm(0x3A, 'r0l'); a.bcs(nx); a.add_b_imm(7, 'r0l')
         a.label(nx); a.mov_b_st('r0l', 1); a.adds1(1)
     a.pop_l(3); a.rts()
+    # ---- LAB: LCD ICONS (the 7-segment line's free bits) ----
+    def seg_addr(row, w): return (SEG_ROW0 if row == 0 else SEG_ROW1) + 2 * w
+    a.label('seg_restore')                                      # free bits back from the snapshot
+    a.mov_b_from_abs(SGLIT, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('sgr_x')
+    set_byte(SGLIT, 0)
+    for k, (row, w, f) in enumerate(SEG_FREE):
+        a.mov_w_from_abs(seg_addr(row, w), 0); a.and_w_imm(~f & 0xFFFF, 0)
+        a.mov_w_from_abs(SGSNAP + 2 * k, 1); a.and_w_imm(f, 1); a.or_w_rr(1, 0); a.mov_w_to_abs(0, seg_addr(row, w))
+    a.label('sgr_x'); a.rts()
+    a.label('seg_show')                                         # snapshot once, then light the bit (or all of them)
+    a.mov_b_from_abs(SGLIT, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('sgs_lit')
+    for k, (row, w, f) in enumerate(SEG_FREE):
+        a.mov_w_from_abs(seg_addr(row, w), 0); a.mov_w_to_abs(0, SGSNAP + 2 * k)
+    set_byte(SGLIT, 1)
+    a.label('sgs_lit')
+    for k, (row, w, f) in enumerate(SEG_FREE):                  # every free bit to the snapshot (or on, in ALL mode)
+        all_ = uniq('sga'); nx = uniq('sgn')
+        a.mov_w_from_abs(seg_addr(row, w), 0); a.and_w_imm(~f & 0xFFFF, 0)
+        a.mov_b_from_abs(SGMODE, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.bne(all_)
+        a.mov_w_from_abs(SGSNAP + 2 * k, 1); a.and_w_imm(f, 1); a.or_w_rr(1, 0); a.bra(nx)
+        a.label(all_); a.mov_w_imm(f, 1); a.or_w_rr(1, 0)
+        a.label(nx); a.mov_w_to_abs(0, seg_addr(row, w))
+    a.mov_b_from_abs(SGMODE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('sgs_x')
+    a.mov_b_from_abs(SGI, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_rr(0, 1); a.add_l_rr(0, 0); a.add_l_rr(1, 0)
+    a.add_l_rr(0, 0)                                            # er0 = 6 * index
+    a.mov_l_imm('sg_bits', 1); a.add_l_rr(0, 1); a.mov_l_ind(1, 2); a.adds4(1); a.mov_w_ld(1, 1)   # er2 = addr, r1 = bit
+    a.mov_w_ld(2, 0); a.or_w_rr(1, 0); a.mov_w_st(0, 2)
+    a.label('sgs_x'); a.rts()
+    a.label('lab_sg_d')
+    a.bsr16('seg_show')
+    a.mov_l_imm(KROW, 1)
+    a.mov_b_from_abs(SGMODE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('sgd_one')
+    row_put('ALL %d FREE BITS ON' % len(SEG_FREEBITS)); a.bra16('sgd_e')
+    a.label('sgd_one'); row_put('BIT ')
+    a.mov_b_from_abs(SGI, 'r0l'); a.extu_w(0); a.adds1(0); a.bsr16('fmt_u'); row_put('/%d  ' % len(SEG_FREEBITS))
+    a.mov_b_from_abs(SGI, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm('sg_info', 2); a.add_l_rr(0, 2); a.add_l_rr(0, 2)
+    a.add_l_rr(0, 2); a.mov_b_ld(2, 'r0l'); a.mov_b_to_abs('r0l', SGTMP)   # sg_info: row*16+word, bit (3 bytes)
+    a.adds1(2); a.mov_b_ld(2, 'r0l'); a.mov_b_to_abs('r0l', SGTMP + 1)
+    row_put('ROW '); a.mov_b_from_abs(SGTMP, 'r0l'); a.shlr_b('r0l'); a.shlr_b('r0l'); a.shlr_b('r0l'); a.shlr_b('r0l')
+    a.extu_w(0); a.bsr16('fmt_u')
+    row_put(' WORD '); a.mov_b_from_abs(SGTMP, 'r0l'); a.and_b_imm(15, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
+    row_put(' BIT '); a.mov_b_from_abs(SGTMP + 1, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
+    a.label('sgd_e'); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
+    D.text(4, 12, KROW, 'font_tiny')
+    D.text(4, 19, 's_sghelp1', 'font_tiny'); D.text(4, 25, 's_sghelp2', 'font_tiny')
+    a.rts()
+    a.label('lab_sg_k')
+    a.mov_b_from_abs(SGI, 'r0l')
+    a.cmp_w_imm(K_RIGHT, 5); a.bne('sgk_l')
+    a.add_b_imm(1, 'r0l'); a.cmp_b_imm(len(SEG_FREEBITS), 'r0l'); a.bcs('sgk_st'); a.mov_b_imm(0, 'r0l'); a.bra('sgk_st')
+    a.label('sgk_l'); a.cmp_w_imm(K_LEFT, 5); a.bne('sgk_u')
+    a.add_b_imm(0xFF, 'r0l'); a.cmp_b_imm(len(SEG_FREEBITS), 'r0l'); a.bcs('sgk_st'); a.mov_b_imm(len(SEG_FREEBITS) - 1, 'r0l')
+    a.label('sgk_st'); a.mov_b_to_abs('r0l', SGI); set_byte(SGMODE, 0); a.jmp('redraw')
+    a.label('sgk_u'); a.cmp_w_imm(K_UP, 5); a.bne('sgk_d'); set_byte(SGMODE, 1); a.jmp('redraw')
+    a.label('sgk_d'); a.cmp_w_imm(K_DOWN, 5); a.bne('sgk_x'); set_byte(SGMODE, 0); a.jmp('redraw')
+    a.label('sgk_x'); a.jmp('done')
     a.label('lab_idle')                                         # ANALOG INPUTS shown: redraw every 40 ms
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LAB, 'r0l'); a.bne('lbi_off')
     a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_off')
     a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('lbi_off')
     a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.bne('lbi_nl')
-    a.mov_b_from_abs(LEDAUTO, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('lbi_x')          # LED SHOW: the chase
-    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LEDT, 1); a.sub_l(1, 0); a.cmp_l_imm(90, 0); a.bcs('lbi_x')
+    a.mov_b_from_abs(LEDAUTO, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('lbi_x')          # LED SHOW: the chase
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LEDT, 1); a.sub_l(1, 0); a.cmp_l_imm(90, 0); a.bcs16('lbi_x')
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LEDT)
     a.mov_b_imm(1, 'r1l'); a.bsr16('led_step'); a.bra16('draw')
-    a.label('lbi_off'); a.bra16('led_restore')                  # not on the LED tab: its LED back as it was
+    a.label('lbi_off'); a.bsr16('seg_restore'); a.bra16('led_restore')   # off the tabs: LED and 7-seg line back
     a.label('lbi_nl'); a.bsr16('led_restore')
-    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_x')
-    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LABT, 1); a.sub_l(1, 0); a.cmp_l_imm(40, 0); a.bcs('lbi_x')
+    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(3, 'r0l'); a.beq16('lbi_x'); a.bsr16('seg_restore')
+    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('lbi_x')
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LABT, 1); a.sub_l(1, 0); a.cmp_l_imm(40, 0); a.bcs16('lbi_x')
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LABT)
     a.bra16('draw')
     a.label('lbi_x'); a.rts()
@@ -3320,6 +3389,11 @@ def build():
     for i in range(len(MF_TGTS)): a.dc_l('s_mfg%d' % i)
     a.label('mf_c2i'); a.raw(bytes(MF_C2I)); a.align2()
     a.label('led_codes'); a.raw(bytes(LED_CODES)); a.align2()
+    a.label('sg_bits')                                          # per free bit: LCD RAM word address, bit mask
+    for row, w, b in SEG_FREEBITS: a.raw(struct.pack('>IH', (SEG_ROW0 if row == 0 else SEG_ROW1) + 2 * w, 1 << b))
+    a.label('sg_info')                                          # per free bit: row * 16 + word, bit, 0
+    for row, w, b in SEG_FREEBITS: a.raw(bytes([row * 16 + w, b, 0]))
+    a.align2()
     a.label('bit16'); a.raw(struct.pack('>16H', *[1 << i for i in range(16)]))
     a.label('lab_chn')
     for i in range(len(LAB_CH_NAMES)): a.dc_l('s_lbc%d' % i)
@@ -3347,7 +3421,7 @@ def build():
                    ('s_armed', 'HIT A PAD'), ('s_cancel', 'EXIT=CANCEL'),
                    ('s_looper', 'LOOPER'), ('s_keys', 'KEYBOARD'),
                    ('s_soon', 'COMING SOON'), ('s_exithelp', 'EXIT=HOME'),
-                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), *MAC_STRS, ('s_lbhelp', 'PRESS ANY BUTTON  EXIT=HOME'), ('s_ledhelp', '</>=STEP  UP=CHASE  DOWN=STOP'), ('s_ledchase', 'CHASE...'), ('s_ksamp', 'SAMPLING...'),
+                   ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), *MAC_STRS, ('s_lbhelp', 'PRESS ANY BUTTON  EXIT=HOME'), ('s_ledhelp', '</>=STEP  UP=CHASE  DOWN=STOP'), ('s_ledchase', 'CHASE...'), ('s_sghelp1', '</>=NEXT BIT  UP=ALL  DOWN=ONE'), ('s_sghelp2', 'WATCH THE 7-SEGMENT LINE'), ('s_ksamp', 'SAMPLING...'),
                    ('s_kwait', 'EXIT=CANCEL'), ('s_kplay', 'PLAY SRC'), ('s_kphelp', 'SHIFT+EXIT=PICK  UP/DN'), ('s_krel', 'REL')):
         a.label(lbl); a.string(s)
     return a.assemble(), a.labels
@@ -3416,7 +3490,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0),
                          (MSLOT, 12), (MSLOT + 1, 0), (MSLOT + 2, 0), (MLVL, 64), (MLVL + 1, 64), (MLVL + 2, 64),
                          *((MCTRL + i, 0) for i in range(6)), *((MCLAST + i, 0xFF) for i in range(6))):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
