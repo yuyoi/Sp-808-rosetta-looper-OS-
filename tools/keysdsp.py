@@ -99,15 +99,17 @@ def build(nvoices=NVOICES):
         mck = 2                                                # level mulcoeff: mc2 for every voice. The FX core (DSP1)
                                                                # has no general mc3: Roland's 20 FX programs only write
                                                                # mc0-mc2; odd voices on mc3 played at random levels on hw
-        put(b + 0, E(0x04, lvl + 1, SH6, 63), 'v%d_lvlk' % v)   # A = L_old * 63/64
-        put(b + 1, E(0x00, 3, SH7, 0), 'v%d_t' % v)             # A += 0x10000 * t >> 7 = t * 512 (target / 64)
-        put(b + 2, E(0x14, phi + 1, SH6, 64), 'v%d_g' % v)      # B = PHI_old * 1    (0 = reset)
-        put(b + 3, E(0x10, 3, SH7, 0), 'v%d_d2' % v)            # B += c2 * 512
-        put(b + 4, E(0x08, lvl, SH6, 64))                       # i[LVL] = sat(A(+1)) = L_new; A = L_new
-        put(b + 5, E(0x10, 2, SH7, 0), 'v%d_d1' % v)            # B += c1 * 8
-        put(b + 6, E(0x10, 1, SH7, 0), 'v%d_d0' % v)            # B += c0 / 8 (c0 multiple of 8)  -> PHI_new
-        put(b + 7, E(0x34, 0xA0 | (mck << 1), SH7, 0))          # mc[k] = sat(A(+4)) = L_new
-        put(b + 9, E(0x0C, phi, SH6, 64), 'v%d_dir' % v)        # i[PHI] = sat(B(+6)); A = +PHI (fwd) / -PHI (rev)
+        # level in B (saturating), phase in A: stored RAW so it wraps like AGE (a saturating store froze every note
+        # after 32767 source samples = 0.74 s; the wrap keeps X = REF - PHI right for the whole 1.48 s take)
+        put(b + 0, E(0x14, lvl + 1, SH6, 63), 'v%d_lvlk' % v)   # B = L_old * 63/64
+        put(b + 1, E(0x10, 3, SH7, 0), 'v%d_t' % v)             # B += 0x10000 * t >> 7 = t * 512 (target / 64)
+        put(b + 2, E(0x04, phi + 1, SH6, 64), 'v%d_g' % v)      # A = PHI_old * 1    (0 = reset)
+        put(b + 3, E(0x00, 3, SH7, 0), 'v%d_d2' % v)            # A += c2 * 512
+        put(b + 4, E(0x5C, lvl, SH7, 0))                        # i[LVL] = sat(B(+1)) = L_new
+        put(b + 5, E(0x00, 2, SH7, 0), 'v%d_d1' % v)            # A += c1 * 8
+        put(b + 6, E(0x00, 1, SH7, 0), 'v%d_d0' % v)            # A += c0 / 8 (c0 multiple of 8)  -> PHI_new
+        put(b + 7, E(0x34, 0xA1 | (mck << 1), SH7, 0))          # mc[k] = sat(B(+4)) = L_new
+        put(b + 9, E(0x44, phi, SH6, 64), 'v%d_dir' % v)        # i[PHI] = raw(A(+6)); A = +PHI (fwd) / -PHI (rev)
         put(b + 10, E(0x00, REF, SH6, -64 & 0xFF))              # A -= REF -> -X (fwd: PHI - AGE, rev: -PHI - AGE_E)
         put(b + 13, E(0x44, nx, SH3, -128 & 0xFF))              # i[NX] = raw(A(+10)) = -X; A = -X * -16 = 16 X
         put(b + 16, E(0x34, 0xC7, SH7, 0) | (0x18 << 23), 'v%d_rdA' % v, 'eram')   # eramvar = A(+13); READvar (+0)

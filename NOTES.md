@@ -225,6 +225,12 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
     turns PARA knob moves into FX parameter writes on any screen; without the gate they'd land in our program.
     Our own writes use own_coef / own_eram / own_load (straight into the routine after its first instruction).
   - Assembler: jsr/jmp accept labels (abs24 relocation).
+  - **Phase fix (all KEYS builds before were affected):** PHI was stored saturating (B, op 0x0C) and froze at
+    0x7FFFFF = 32767 source samples = 0.74 s: longer captures stopped advancing and turned into a DC level. The phase
+    now lives in A and is stored raw (op 0x44, wraps mod 2^24 like AGE), the level moved to B (0x14/0x10, stored
+    with 0x5C, mc2 written from B with 0x34 0xA5). Model: a 1.3 s take plays clean to the end.
+  - Assembler rejects duplicate labels (the knob routine's `kn_out` exit had silently jumped into the note-on
+    routine's `kn_out`, popping 4 registers: a crash on hardware).
 
 ### Hardware results 2026-10-14 (v1.1 / v1.2) and v1.3
 - **KEYS works on the unit:** pitched across the pads, fast chords "sound great". Our own DSP1 program, on hw.
