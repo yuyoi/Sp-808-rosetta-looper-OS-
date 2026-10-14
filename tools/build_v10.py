@@ -305,6 +305,9 @@ ATT_PER = bytes(1 if ms and ms < KEYS_LEVEL else (ms // KEYS_LEVEL if ms else 0)
 ATT_INC = bytes(-(-KEYS_LEVEL // ms) if ms and ms < KEYS_LEVEL else (1 if ms else 0) for ms in ATT_MS)  # levels per step
 NV = keysdsp.NVOICES
 DSP_PROG, DSP_PARAMS = keysdsp.build()
+import mfxdsp
+MFX_PROG, MFX_PARAMS = mfxdsp.build()
+MFX_BASE = DSP_BASE + 0x900                   # the MFX DSP1 program table, after the KEYS one
 def dsp_addr(name): return 0x1000 | (DSP_PARAMS[name][1] << 2)
 NKEYS, KEY_LO, MIDI_ROOT = 61, 24, 60                               # key ids 0..60 = root-24 .. root+36 semitones; MIDI C4 = root
 PAD2KEY, MIDI2KEY = KEY_LO - KEYS_ROOT, MIDI_ROOT - KEY_LO           # pad p -> key p + 17; MIDI note n -> key n - 36
@@ -420,11 +423,31 @@ LKEYW, LABT = RAM_BASE + 0x428, RAM_BASE + 0x42C
 ADC_TAB, ADC_N, SWNAMES, SWCODES, SW_N = 0x426CBE, 14, 0x15F9E8, 0x16414C, 67
 LAB_CH_NAMES = ['', '', '', '', '', '', 'PARA-A', 'PARA-B', 'PARA-C', 'BEAM L', 'BEAM R', 'FOOT SW?', '', '']
 LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt')]
+# MFX (v1.91, interface + hooks; the sound blocks come later): our DSP1 program (mfxdsp.py) serves DSP0's three FX
+# insert slots (mixer group 7 index 0/1/2). Slot 1 goes through the stock FX LOCATION (so the EFFECTS button and the
+# OS's own re-apply on pad playback agree with it), slots 2/3 are written straight (the OS never touches them).
+MON, MLOADED, MTAB, MCUR = (RAM_BASE + 0x430 + i for i in range(4))
+MSLOT, MLVL, MCTRL, MCLAST = RAM_BASE + 0x434, RAM_BASE + 0x437, RAM_BASE + 0x43A, RAM_BASE + 0x440   # 3, 3, 6, 6 bytes
+MSAVEIDX, MSAVEFLG = RAM_BASE + 0x446, RAM_BASE + 0x447   # the stock FX LOCATION before MFX went on
+FX_LOAD_PATCH, FX_PATCH_BUF = 0x1081D6, 0x42235E   # stock: load the FX patch at er0 (algorithm word first); current patch
+MF_CODE_NAMES = ['OFF', 'SEND/RETURN', 'TR.A PRE-EQ', 'TR.A POST-EQ', 'TR.B PRE-EQ', 'TR.B POST-EQ', 'TR.C PRE-EQ',
+                 'TR.C POST-EQ', 'TR.D PRE-EQ', 'TR.D POST-EQ', 'MIC/LINE PRE-EQ', 'MIC/LINE POST', 'MASTER', 'RECORD',
+                 'AUX-OUT']                                          # by mixer code 0..14
+MF_C2I = [15, 0, 6, 7, 8, 9, 10, 11, 12, 13, 4, 5, 1, 2, 3]       # mixer code -> stock FX LOCATION index
+MF_SRC = [('KNOB A', 6), ('KNOB B', 7), ('KNOB C', 8), ('BEAM L', 9), ('BEAM R', 10), ('FOOT SW', 11)]   # (name, ADC)
+MF_TGTS = ['OFF', 'SLOT 1 LEVEL', 'SLOT 2 LEVEL', 'SLOT 3 LEVEL']
+MFX_TABS = [
+    ('FX CHAIN', [('ENGINE', MON, 0, 1, 'mfx_onoff', ('s', 'mf_offon', 2))] +
+                 [x for k in range(3) for x in (('SLOT %d AT' % (k + 1), MSLOT + k, 0, 14, 'mfx_route', ('s', 'mf_codes', 15)),
+                                                ('SLOT %d LEVEL' % (k + 1), MLVL + k, 0, 127, 'mfx_levels', ('n',)))]),
+    ('CONTROLS', [(nm, MCTRL + i, 0, len(MF_TGTS) - 1, 'mfx_ctrl_reset', ('s', 'mf_tgts', len(MF_TGTS)))
+                  for i, (nm, ch) in enumerate(MF_SRC)])]
 # Mac pages: pid, window name, [(submode description, items)], tab / row variables
 MAC_PAGES = [dict(pid='dd', name='DDS-DSP', tabs=[(DDS_DESC[ti], items) for ti, (_, items) in enumerate(DDS_TABS)],
                   tab=KDTAB, cur=KDCUR),
              dict(pid='rt', name='ROUTING', tabs=ROUTE_TABS, tab=RTAB, cur=RCUR),
-             dict(pid='lb', name='LAB', tabs=LAB_TABS, tab=LTAB, cur=LCURX)]   # a str instead of items: own body
+             dict(pid='lb', name='LAB', tabs=LAB_TABS, tab=LTAB, cur=LCURX),
+             dict(pid='mf', name='MFX', tabs=MFX_TABS, tab=MTAB, cur=MCUR)]   # a str instead of items: own body
 MAC_STRS = []
 for P_ in MAC_PAGES:
     MAC_STRS += [('s_%snm' % P_['pid'], P_['name'])]
@@ -433,6 +456,8 @@ for P_ in MAC_PAGES:
     MAC_STRS += [('s_%si%d_%d' % (P_['pid'], ti, i), it[0]) for ti, (_, items) in enumerate(P_['tabs'])
                  if not isinstance(items, str) for i, it in enumerate(items)]
 MAC_STRS += [('s_lbc%d' % i, n) for i, n in enumerate(LAB_CH_NAMES)]
+MAC_STRS += [('s_mfo0', 'OFF'), ('s_mfo1', 'ON')] + [('s_mfc%d' % i, n) for i, n in enumerate(MF_CODE_NAMES)]
+MAC_STRS += [('s_mfg%d' % i, n) for i, n in enumerate(MF_TGTS)]
 MAC_STRS += [('s_rtl%d' % i, n) for i, n in enumerate(RT_LOC_NAMES)] + [('s_rtp%d' % i, n) for i, (n, _) in enumerate(RT_PRESETS)]
 def sb_thumb(n): return max(3, round(22 * 3 / n))                       # scroll bar thumb height for n rows
 OSC_MIDI0, OSC_STEPS = 12, 16                                      # osc table: MIDI 12.. in 1/16 semitones (detune steps)
@@ -453,11 +478,11 @@ LP_MSGS = [('s_lm1', 'BANK FULL'), ('s_lm2', '4 LAYERS MAX'), ('s_lm3', 'TAKE CA
 PLAY_ICON = ['X......', 'XXX....', 'XXXXX..', 'XXXXXXX', 'XXXXX..', 'XXX....', 'X......']
 STOP_ICON = ['.......', '.XXXXX.', '.XXXXX.', '.XXXXX.', '.XXXXX.', '.XXXXX.', '.......']
 MAGIC = 0x4A535721
-P_HOME, P_MPC, P_LOOP, P_KEYS, P_KSET, P_DDS, P_ROUTE, P_LAB = 0, 1, 2, 3, 4, 5, 6, 7
+P_HOME, P_MPC, P_LOOP, P_KEYS, P_KSET, P_DDS, P_ROUTE, P_LAB, P_MFX = 0, 1, 2, 3, 4, 5, 6, 7, 8
 SM_NEXT, SM_CLASSIC, SM_TAP, SM_HOLD = 0, 1, 2, 3
 MS_IDLE, MS_ARMED, MS_REC = 0, 1, 2
 
-TILES = [('mpc', 'MPC'), ('loop', 'LOOP'), ('keys', 'KEYS'), ('edit', 'S-EDIT'), ('dds', 'DDS-DSP'), ('route', 'ROUTING'), ('lab', 'LAB'), ('sys', 'SYS')]   # 4 shown, scrolls
+TILES = [('mpc', 'MPC'), ('loop', 'LOOP'), ('keys', 'KEYS'), ('edit', 'S-EDIT'), ('dds', 'DDS-DSP'), ('route', 'ROUTING'), ('lab', 'LAB'), ('mfx', 'MFX'), ('sys', 'SYS')]   # 4 shown, scrolls
 SMODE_NAMES = ['NEXT FREE', 'CLASSIC', 'TAP', 'HOLD']
 POPUPS = [('s_bankfull', 'BANK FULL'), ('s_pickpad', 'HIT A PAD FIRST'), ('s_canceled', 'TAKE CANCELED')]   # MSG 1-3
 GRID_X, GRID_Y = 99, 1                      # 4x4 pad map, 6 px pads, 1 px gaps
@@ -577,6 +602,8 @@ def build():
     a.bsr16('lp_idle')                            # looper clock, layer starts, LOOP page refresh
     a.bsr16('keys_idle')                          # KEYS: sampling timer / onset, pending note-ons
     a.bsr16('lab_idle')                           # LAB: live analog bars
+    a.bsr16('mfx_guard')                          # MFX: (re)load our DSP1 program while it is on
+    a.bsr16('mfx_ctrl')                           # MFX: knobs / D-Beam / footswitch -> slot levels
     a.mov_b_from_abs(BOOTSND, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('id_dial')   # boot sound: pad 16, once
     set_byte(BOOTSND, 1)
     a.mov_w_imm(BOOT_PAD, 0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
@@ -589,6 +616,7 @@ def build():
     a.cmp_b_imm(P_DDS, 'r1l'); a.beq('id_mpc')
     a.cmp_b_imm(P_ROUTE, 'r1l'); a.beq('id_mpc')
     a.cmp_b_imm(P_LAB, 'r1l'); a.beq('id_mpc')
+    a.cmp_b_imm(P_MFX, 'r1l'); a.beq('id_mpc')
     a.cmp_b_imm(P_HOME, 'r1l'); a.bne16('done')
     a.mov_w_imm(K_DOWN, 5); a.mov_w_rr(0, 0); a.bpl('id_key')
     a.mov_w_imm(K_UP, 5); a.bra('id_key')
@@ -633,6 +661,7 @@ def build():
     a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('k_dd')
     a.cmp_b_imm(P_ROUTE, 'r0l'); a.beq16('k_rt')
     a.cmp_b_imm(P_LAB, 'r0l'); a.beq16('k_lb')
+    a.cmp_b_imm(P_MFX, 'r0l'); a.beq16('k_mf')
     a.cmp_b_imm(P_LOOP, 'r0l'); a.bne16('k_other')
     a.cmp_w_imm(K_ENTER, 5); a.bne('kl_nent')                     # LOOP page: ENTER = debug trace on/off
     a.mov_b_from_abs(LDEBUG, 'r0l'); a.xor_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', LDEBUG); a.bra16('redraw')
@@ -878,6 +907,7 @@ def build():
     a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('d_dd')
     a.cmp_b_imm(P_ROUTE, 'r0l'); a.beq16('d_rt')
     a.cmp_b_imm(P_LAB, 'r0l'); a.beq16('d_lb')
+    a.cmp_b_imm(P_MFX, 'r0l'); a.beq16('d_mf')
     # ---- HOME: 4 of the icon tiles; the view scrolls so the cursor's tile is always on screen ----
     a.mov_b_from_abs(CUR, 'r0l')
     for first in range(1, len(TILES) - 3): a.cmp_b_imm(3 + first, 'r0l'); a.beq16('dh_v%d' % first)
@@ -1240,7 +1270,7 @@ def build():
     a.mov_b_imm(0xFF, 'r0l')
     for i in range(3): a.mov_b_to_abs('r0l', KNOB + i)                              # knobs: apply all on the next poll
     a.mov_l_imm(0, 0); a.mov_l_to_abs(0, KNOB_T)
-    set_byte(KGATE, 1)                                                               # from now Roland can't write DSP1
+    a.bset_abs(0, KGATE)                                                             # from now Roland can't write DSP1
     a.rts()
 
     a.label('keys_load')                       # mute, swap the DSP1 algorithm for ours, set it up, unmute
@@ -1259,7 +1289,7 @@ def build():
     a.mov_w_imm(0xFFFF, 0); a.mov_w_to_abs(0, FX_CUR)         # the stock FX engine must reload its algorithm later
     for w in FX_MUTE_WORDS: a.mov_w_imm(0x0100, 8); a.mov_w_imm(0x1000 | (w << 2), 0); a.jsr('own_coef')
     a.bsr16('keys_rev_apply')                                                       # direction, after a (re)load
-    set_byte(KLOADED, 1)
+    set_byte(KLOADED, 1); set_byte(MLOADED, 0)                                      # (MFX's program is gone)
     a.rts()
 
     a.label('keys_route_on')                   # FX insert point -> master (0x0C) through the OS mixer routine
@@ -1287,7 +1317,7 @@ def build():
     a.label('kg_out'); a.rts()
 
     a.label('keys_exit')                       # leaving the page: voices off, recording off, routing back
-    set_byte(KGATE, 0); set_byte(KACTIVE, 0); set_byte(KBSEL, 0)
+    a.bclr_abs(0, KGATE); set_byte(KACTIVE, 0); set_byte(KBSEL, 0)
     voices_silent()
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.beq('kx_r'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.beq('kx_r')
     a.bsr16('keys_rec_stop'); set_byte(KSTATE, KS_IDLE)
@@ -1360,8 +1390,9 @@ def build():
         go = uniq('gg')
         if kind == 'adr': a.label(gl); a.btst_imm(4, 'r0h'); a.beq(go)               # chip 0 (r0 bit 12 clear): pass
         else: a.label(gl); a.mov_w_rr(0, 0); a.beq(go)                               # loader: r0 = chip
-        a.btst_abs(0, KGATE); a.beq(go)
-        a.rts()                                                                      # KEYS owns DSP1: drop it
+        dr = uniq('gd')
+        a.btst_abs(0, KGATE); a.bne(dr); a.btst_abs(1, KGATE); a.beq(go)             # bit 0 KEYS, bit 1 MFX
+        a.label(dr); a.rts()                                                         # ours own DSP1: drop it
         a.label(go); a.raw(bytes.fromhex(orig)); a.jmp(addr + 4)
     for gl, addr, orig in (('own_coef', 0x108936, '01206df4'), ('own_eram', 0x108B64, '01106df2'),
                            ('own_load', 0x1096D2, '01106df2')):
@@ -2542,6 +2573,82 @@ def build():
         a.label('mx_%d_%d' % (g_, i_))
         a.mov_b_from_abs(mx(g_, i_), 'r1l'); a.mov_b_imm(0, 'r1h'); a.mov_w_imm(i_, 8); a.mov_w_imm(g_, 0)
         a.jsr(MIXER_PARAM); a.rts()
+    # ---- MFX ----
+    a.label('mfx_onoff')
+    a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('mfx_off')
+    a.mov_b_from_abs(MIXER_LOC_IDX, 'r0l'); a.mov_b_to_abs('r0l', MSAVEIDX)      # remember the stock FX LOCATION
+    a.mov_b_from_abs(MIXER_LOC_FLAGS, 'r0l'); a.mov_b_to_abs('r0l', MSAVEFLG)
+    a.bset_abs(1, KGATE)                                                         # Roland's DSP1 writes stop here
+    a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfo_x')     # (KEYS owns DSP1: the guard loads later)
+    a.bsr16('mfx_load'); a.bsr16('mfx_route')
+    a.label('mfo_x'); a.rts()
+    a.label('mfx_off')
+    a.bclr_abs(1, KGATE)
+    for k in (1, 2): a.mov_w_imm(0, 1); a.mov_w_imm(k, 8); a.mov_w_imm(7, 0); a.jsr(MIXER_PARAM)   # slots 2/3 out
+    a.mov_b_from_abs(MSAVEIDX, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_IDX)      # the stock FX LOCATION back
+    a.mov_b_from_abs(MSAVEFLG, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_FLAGS); a.jsr(FX_LOC_APPLY)
+    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mff_x')
+    set_byte(MLOADED, 0)
+    a.mov_w_from_abs(FX_PATCH_BUF, 0); a.cmp_w_imm(20, 0); a.bcc('mff_x')        # the stock FX patch back (if sane)
+    a.mov_l_imm(FX_PATCH_BUF, 0); a.jsr(FX_LOAD_PATCH)
+    a.label('mff_x'); a.rts()
+    a.label('mfx_load')                                         # mute, our program in, levels, unmute
+    for w in FX_MUTE_WORDS: a.mov_w_imm(0xF800, 8); a.mov_w_imm(0x1000 | (w << 2), 0); a.jsr('own_coef')
+    wait_ms(15)
+    a.mov_l_imm(MFX_BASE, 0); a.push_l(0)
+    a.mov_w_imm(0x300 - 0x3C, 1); a.mov_w_imm(0x3C, 8); a.mov_w_imm(1, 0); a.jsr('own_load'); a.adds4(7)
+    a.mov_w_imm(0xFFFF, 0); a.mov_w_to_abs(0, FX_CUR)                            # (the stock reloads its algorithm later)
+    set_byte(MLOADED, 1); set_byte(KLOADED, 0)                                   # KEYS' program is gone
+    a.bsr16('mfx_levels')
+    for w in FX_MUTE_WORDS: a.mov_w_imm(0x0100, 8); a.mov_w_imm(0x1000 | (w << 2), 0); a.jsr('own_coef')
+    a.rts()
+    a.label('mfx_route')                                        # the three slots to their insert points
+    a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('mfr_x')
+    a.mov_b_from_abs(MSLOT, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm('mf_c2i', 1); a.add_l_rr(0, 1)
+    a.mov_b_ld(1, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_IDX)                    # slot 1: the stock way
+    a.bset_abs(7, MIXER_LOC_FLAGS); a.jsr(FX_LOC_APPLY)
+    for k in (1, 2):
+        a.mov_b_from_abs(MSLOT + k, 'r1l'); a.mov_b_imm(0, 'r1h'); a.mov_w_imm(k, 8); a.mov_w_imm(7, 0); a.jsr(MIXER_PARAM)
+    a.label('mfr_x'); a.rts()
+    a.label('mfx_levels')                                       # slot levels -> the program's level coefficients
+    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfl_x')
+    for k in range(3):
+        for side in 'lr':
+            w_ = MFX_PARAMS['m%d_%s' % (k, side)][1]
+            a.mov_b_from_abs(MLVL + k, 'r0h'); a.mov_b_imm((MFX_PROG[w_] >> 8) & 3, 'r0l'); a.mov_w_rr(0, 8)
+            a.mov_w_imm(0x1000 | (w_ << 2), 0); a.jsr('own_coef')
+    a.label('mfl_x'); a.rts()
+    a.label('mfx_guard')                                        # idle: MFX on -> our program in DSP1 (after KEYS too)
+    a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfg_x')
+    a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfg_x')
+    a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('mfg_x')
+    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfg_x')
+    a.bsr16('mfx_load'); a.bsr16('mfx_route')
+    a.label('mfg_x'); a.rts()
+    a.label('mfx_ctrl_reset')                                   # a mapping changed: apply every source again
+    a.mov_b_imm(0xFF, 'r0l')
+    for i in range(len(MF_SRC)): a.mov_b_to_abs('r0l', MCLAST + i)
+    a.rts()
+    a.label('mfx_ctrl')                                         # idle: mapped controls -> their targets (on change)
+    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('mfc_x')
+    a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('mfc_x')
+    a.mov_b_imm(0, 'r2h')                                       # r2h = something changed
+    for i, (nm, ch) in enumerate(MF_SRC):
+        nx = uniq('mfc')
+        a.mov_b_from_abs(MCTRL + i, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.beq16(nx)
+        a.mov_b_from_abs(ADC_TAB + ch, 'r0l'); a.shlr_b('r0l')                   # 0..127
+        a.mov_b_from_abs(MCLAST + i, 'r0h'); a.cmp_b_rr('r0l', 'r0h'); a.beq16(nx)
+        a.mov_b_to_abs('r0l', MCLAST + i)
+        for t in range(1, len(MF_TGTS)):                                         # SLOT t LEVEL
+            nt = uniq('mft'); a.cmp_b_imm(t, 'r1l'); a.bne(nt); a.mov_b_to_abs('r0l', MLVL + t - 1); a.label(nt)
+        a.mov_b_imm(1, 'r2h')
+        a.label(nx)
+    a.cmp_b_imm(0, 'r2h'); a.beq('mfc_x')
+    a.bsr16('mfx_levels')
+    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_MFX, 'r0l'); a.bne('mfc_x')
+    a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('mfc_x')
+    a.bra16('draw')                                             # the MFX page shows the new level
+    a.label('mfc_x'); a.rts()
     a.label('rt_loc')                                           # FX LOCATION changed by hand: preset -> CUSTOM
     a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', RPRE)
     a.label('rt_loc2')                                          # the mixer's FX LOCATION on, apply it the stock way
@@ -3108,6 +3215,12 @@ def build():
     a.align2()
     a.label('rt_locn')
     for i in range(len(RT_LOC_NAMES)): a.dc_l('s_rtl%d' % i)
+    a.label('mf_offon'); a.dc_l('s_mfo0'); a.dc_l('s_mfo1')
+    a.label('mf_codes')
+    for i in range(len(MF_CODE_NAMES)): a.dc_l('s_mfc%d' % i)
+    a.label('mf_tgts')
+    for i in range(len(MF_TGTS)): a.dc_l('s_mfg%d' % i)
+    a.label('mf_c2i'); a.raw(bytes(MF_C2I)); a.align2()
     a.label('lab_chn')
     for i in range(len(LAB_CH_NAMES)): a.dc_l('s_lbc%d' % i)
     a.label('rt_pren')
@@ -3151,6 +3264,11 @@ def main(raw, outdir):
     tab = keysdsp.rom_table(DSP_PROG)                          # the DSP1 program, 708 words x 3 bytes
     o = DSP_BASE - 0x100000
     assert not any(img[o:o + len(tab)]), 'DSP table flash not empty'
+    img[o:o + len(tab)] = tab
+    assert DSP_BASE + len(tab) <= MFX_BASE
+    tab = keysdsp.rom_table(MFX_PROG)                          # MFX: same layout (from word 0x3C)
+    o = MFX_BASE - 0x100000
+    assert not any(img[o:o + len(tab)]), 'MFX table flash not empty'
     img[o:o + len(tab)] = tab
 
     def patch_screen(idx, want_handler, new_handler, params=None, page=None):
@@ -3198,7 +3316,9 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9)):
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0),
+                         (MSLOT, 12), (MSLOT + 1, 0), (MSLOT + 2, 0), (MLVL, 64), (MLVL + 1, 64), (MLVL + 2, 64),
+                         *((MCTRL + i, 0) for i in range(6)), *((MCLAST + i, 0xFF) for i in range(6))):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         a.mov_b_imm(0, 'r0l')
         for v_ in range(NV): a.mov_b_to_abs('r0l', VLAS + v_)

@@ -268,6 +268,21 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   the sample end: the sample is cut there (the LA cut, VLAT = VSEND) and the oscillators hold the note. (Found by the
   suite: ENV DECAY/SUSTAIN with SAW + SAMPLE ended at the 439 ms take.)
 - Tests: `tools/test_route.py` (ROUTING presets / FX AT / mixer calls / dial step, LAB bars / channel / key names).
+- **MFX tile (interface + hooks; the sound blocks wait for ears + an audio loop):** our DSP1 program
+  (`tools/mfxdsp.py`, table at DSP_BASE + 0x900) serves all **three** DSP0 insert slots; each slot is a stereo LEVEL
+  block for now (64 = x1, 127 = x2, 0 = silent), which is enough to prove the slots on the unit by ear.
+  - FX CHAIN: ENGINE OFF/ON, SLOT 1-3 AT (OFF + the 14 insert points), SLOT 1-3 LEVEL. CONTROLS: KNOB A/B/C, BEAM L/R,
+    FOOT SW -> OFF / SLOT n LEVEL (raw ADC >> 1, applied on change).
+  - ON: saves the stock FX LOCATION, closes the write gate (KGATE bit 1; KEYS uses bit 0), loads our program (mute,
+    load, FX_CUR = 0xFFFF, levels, unmute), routes: slot 1 the stock way (index + bit 7 + 0x1361CE, so EFFECTS off =
+    slot 1 off, and the OS's re-apply on pad playback agrees), slots 2/3 straight MIXER_PARAM(7, 1/2, code).
+  - OFF: gate open, slots 2/3 to code 0, the stock location back, and the stock FX patch reloaded with Roland's
+    0x1081D6(0x42235E) if its algorithm word is < 20 (**unverified on hw**: 0x42235E looked like the current patch).
+  - KEYS and MFX share DSP1: each load clears the other's "loaded" flag; mfx_guard (idle, our screens only) reloads
+    MFX after KEYS gives DSP1 back.
+  - Emulator (`tools/test_mfx.py`, DSP1 model): load through the flash table, all slots x1.0, slot 2 at 32 -> x0.5,
+    knob A -> slot 3 level 100 -> x1.56, Roland's writes dropped while on, passed after OFF, KEYS round trip reloads.
+  - Hw test idea: ENGINE ON, SLOT 2 AT TR.A POST-EQ, SLOT 2 LEVEL 0 -> track A (the pad voice on channel A) silent.
 
 ### Hidden stuff (log of finds, 2026-10-15)
 - **3 FX insert slots in DSP0, Roland uses 1** (mixer group 7 index 0/1/2): slots 1/2 send on GRAM D0-D6 and return on
