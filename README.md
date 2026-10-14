@@ -3,12 +3,12 @@
 # SP-808 Rosetta Looper OS
 
 > **Runs on real hardware.** Custom firmware boots on a real Roland SP-808(EX) and installs straight from a Zip or
-> ZuluIDE SD card: Roland-chan boot animation, own home menu, MPC-style pad sampling. See [Status](#status-2026-10-13).
+> ZuluIDE SD card: Roland-chan boot animation, own home menu, MPC-style pad sampling, and **KEYS: an 8-voice pitched
+> sampler running as our own program in the FX DSP**, on top of the 4 stock voices. See [Status](#status-2026-10-14).
 
 > **Preview, parked October 2026.** This is published as-is so people can see the menus, the tooling and how far the
-> reverse engineering got, and expand it if they want. Up to v0.8 is confirmed on a real unit; the looper (v0.9b)
-> and the keyboard mode with its own DSP program (v1.0 / v1.1, incl. MIDI keyboard, velocity, release) are **built
-> and pass the emulator tests but were never flashed**. The code is working-state, not cleaned up: one patch script
+> reverse engineering got, and expand it if they want. KEYS (v1.72) is confirmed on a real unit; the looper (v0.9b)
+> is built and emulator-tested but was never flashed. The code is working-state, not cleaned up: one patch script
 > per version, long notes, no packaging. Start with [Use](#use), `NOTES.md` and `tools/build_v10.py`.
 > The disk side (takes to/from WAV, R-DAC codec, ZuluIDE tool) lives in
 > [sp-808-disk-studio](https://github.com/yuyoi/sp-808-disk-studio).
@@ -38,6 +38,13 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
   - On the result screen: ENTER keeps the take, another pad moves it there (the selected pad goes back to how it was).
   - Other modes: NEXT FREE (first empty pad), TAP / HOLD (SHIFT+pad records into that pad). Start INSTANT or WAIT
     SIGNAL.
+- **KEYS mode (v1.72, works on hardware):** hit any pad from any bank (PAD BANK or the dial picks the bank) and it is
+  captured into the FX DSP's delay RAM, then played pitched across the 16 pads and a MIDI keyboard:
+  - 8 voices of our own DSP1 program **plus** the 4 stock disk voices: pads and tracks keep playing through KEYS.
+  - Live pitch per note: each voice reads the RAM with its own fractional phase and interpolates (`keysdsp.py`).
+  - MIDI keyboard C2-C7 (C4 = pad 8), velocity, release on the dial, SHIFT+EXIT or PAD BANK = pick another sample.
+  - **S-EDIT** page: resonant low-pass (knob A cutoff, B resonance), attack (knob C), release, reverse, loop
+    (sustain while held, crossfaded voice handoff), THRU on/off.
 
 ## State in one look
 
@@ -45,16 +52,15 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 |---|---|
 | decode Roland's update, build, install from disk, recovery | works on hardware |
 | Roland-chan boot, home menu, MPC page, record / take-done screens, 7-seg ticker (v0.8) | works on hardware |
+| KEYS: 8 + 4 voices, MIDI keyboard, velocity, S-EDIT filter / attack / release / reverse / loop, PAD BANK (v1.72) | works on hardware |
 | looper: pad layers, overdub, undo / clear on PAD SAMPLING (v0.9b) | built, emulator-tested, **not flashed** |
-| KEYS: 8-voice pitched sampler as our own program in the FX DSP (v1.0) | built, emulator-tested, **not flashed** |
-| KEYS: MIDI keyboard C2-C7, velocity, release 0-2 s, on-screen DSP monitor (v1.1) | built, emulator-tested, **not flashed** |
 | H8S disassembler / xref / assembler / emulator, ESP2 DSP decoder and simulator | work, used for all of the above |
 
 Open points for whoever picks it up:
 - **Looper engine:** the song engine has no loop/cycle play at all. Pads loop seamlessly, so layers = looping pads
   (stock sampling stops all pads; that call is hooked out). Notes: `LOOPER_DESIGN.md`.
-- **KEYS on hardware:** unknown until flashed. The v1.1 KEYS page shows a monitor line `S<state> R<fx route>
-  <4 readback bytes>` for exactly that test (`NOTES.md`, "v1.0" and "v1.1").
+- **KEYS:** one rare hang seen once after fast chords (gone after that). Stock FX stay silent after KEYS until an FX is
+  loaded again. Samples up to ~1.4 s. Resampling the keys' output isn't done.
 - Voices: DSP0 (the voice engine) is full, so the 4 disk voices stay 4; extra voices live in **DSP1, the effects
   core** (Roland/Toshiba ESP2, instruction set public since The Usual Suspects' JP-8000 work). Its 128K-word
   delay RAM is ~3 s of audio: short samples only.
@@ -92,7 +98,7 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.1; v0.7b-e are LCD diagnostics) |
+| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.72; v0.7b-e are LCD diagnostics) |
 | `tools/esp.py`, `tools/dspdump.py`, `tools/fxcapture.py` | ESP2 DSP decoder / disassembler / cycle simulator; DSP programs out of the image; live FX programs captured by running the stock loader in the emulator |
 | `tools/keysdsp.py`, `tools/test_v10.py` | our DSP1 sampler program (+ model test) and the KEYS end-to-end test |
 | `tools/gfxlib.py`, `tools/ui_gfx.py` | graphics engine (framebuffer, fonts, icons, LCD packing) and the mockup renderer |
@@ -112,7 +118,7 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
   No Roland code or data is distributed here.
 - MIT licensed (see `LICENSE`).
 
-## Status (2026-10-13)
+## Status (2026-10-14)
 
 Confirmed on a real SP-808EX with a ZuluIDE (Zip drive emulator):
 - Disk install of a modified OS.
@@ -132,14 +138,14 @@ Also fixed on the way: since v0.4 our RAM sat inside the stock 2000-record event
   - Take done: length, pad and the take's level envelope.
   - The time-counter digits cycle "ROSETTA OS", the version and the MB left on the disk.
 
-Built and emulator-tested only (never on the unit), all in `tools/build_v10.py`:
-- **v0.9b looper:** PAD SAMPLING tap = REC / PLAY / DUB, double tap = stop, hold = undo / clear; layers are pads.
-- **v1.0 KEYS:** the FX DSP (DSP1) runs our own sampler program (`tools/keysdsp.py`): sample a pad into the delay
-  RAM with onset detection, then the 16 pads play it pitched, 8 voices, pad 8 = root.
-- **v1.1:** MIDI keyboard through the stock MIDI parser's handler table (C2-C7, C4 = pad 8), velocity to level,
-  release 0-2 s on the dial, DSP monitor line. Build 1110.
+- **v1.0-v1.72 KEYS, confirmed on the unit 2026-10-14** ("works now"): the FX DSP (DSP1) runs our own sampler
+  program (`tools/keysdsp.py`), Roland's DSP1 writes are gated while it owns the chip, the master runs through it
+  so pads/tracks and 8 KEYS voices play together. MIDI keyboard through the stock MIDI parser's handler table.
+  Hardware fixes on the way: no general mc3 on DSP1 (all voices on mc2), phase stored raw (notes froze after 0.74 s),
+  per-channel pass-through, idle voices hard-muted (they replayed the delay RAM quietly), PAD BANK handled inside KEYS.
 
-Parked 2026-10-13. To continue: flash v1.1 (`Use` below), read the monitor line, then `NOTES.md` has the plan.
+Built and emulator-tested only (never on the unit):
+- **v0.9b looper:** PAD SAMPLING tap = REC / PLAY / DUB, double tap = stop, hold = undo / clear; layers are pads.
 
 ## TODO
 
@@ -148,8 +154,8 @@ Parked 2026-10-13. To continue: flash v1.1 (`Use` below), read the monitor line,
 - [ ] Assignable record button (sampling and looper).
 - [x] Looper v1 (v0.9/v0.9b, hw test pending): pad layers, overdub + undo/clear, all on PAD SAMPLING (footswitch).
 - [ ] Looper next: MIDI control, the footswitch jack (ADC ch 11), tempo/click, save loops to disk.
-- [x] Keyboard mode v1 (v1.0, hw test pending): one sample across the 16 pads, 8 voices, in the FX DSP.
-- [x] Keyboard v1.1 (hw test pending): MIDI keyboard (C2-C7, C4 = pad 8), velocity, release 0-2 s, DSP monitor line.
-- [ ] Keyboard next: longer samples (2-word phase), more voices, MIDI channel setting.
+- [x] Keyboard mode (v1.0-v1.72, works on hw): 8 + 4 voices, MIDI keyboard, velocity, S-EDIT filter / attack /
+  release / reverse / loop / THRU, PAD BANK.
+- [ ] Keyboard next: resample the keys' output, stock FX back after KEYS, longer samples, MIDI channel setting.
 - [ ] Strip the groove/song screens.
 - [ ] Doom.
