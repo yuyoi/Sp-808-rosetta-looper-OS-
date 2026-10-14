@@ -4,11 +4,12 @@
 
 > **Runs on real hardware.** Custom firmware boots on a real Roland SP-808(EX) and installs straight from a Zip or
 > ZuluIDE SD card: Roland-chan boot animation, own home menu, MPC-style pad sampling, and **KEYS: an 8-voice pitched
-> sampler running as our own program in the FX DSP**, on top of the 4 stock voices. See [Status](#status-2026-10-14).
+> sampler running as our own program in the FX DSP**, on top of the 4 stock voices, with **DDS-DSP** oscillators
+> (saw / pulse / triangle / detuned unison) layered on every voice. See [Status](#status-2026-10-14).
 
-> **Preview, parked October 2026.** This is published as-is so people can see the menus, the tooling and how far the
-> reverse engineering got, and expand it if they want. KEYS (v1.72) is confirmed on a real unit; the looper (v0.9b)
-> is built and emulator-tested but was never flashed. The code is working-state, not cleaned up: one patch script
+> **Preview, work in progress (October 2026).** This is published as-is so people can see the menus, the tooling and
+> how far the reverse engineering got, and expand it if they want. KEYS and DDS-DSP (v1.81) are confirmed on a real
+> unit; the old looper (v0.9b) is on the card but not tested yet, and Looper v2 is planned (`LOOPER_DESIGN.md`). The code is working-state, not cleaned up: one patch script
 > per version, long notes, no packaging. Start with [Use](#use), `NOTES.md` and `tools/build_v10.py`.
 > The disk side (takes to/from WAV, R-DAC codec, ZuluIDE tool) lives in
 > [sp-808-disk-studio](https://github.com/yuyoi/sp-808-disk-studio).
@@ -45,6 +46,10 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
   - MIDI keyboard C2-C7 (C4 = pad 8), velocity, release on the dial, SHIFT+EXIT or PAD BANK = pick another sample.
   - **S-EDIT** page: resonant low-pass (knob A cutoff, B resonance), attack (knob C), release, reverse, loop
     (sustain while held, crossfaded voice handoff), THRU on/off.
+- **DDS-DSP page (v1.8-v1.81, works on hardware):** every KEYS voice also runs its own oscillators in the DSP, mixed
+  with the sample: SAMPLE, SAW, PULSE + PW, TRI, UNISON (a second saw, DETUNE in 1/16 semitones), OCT. SAMPLE 0 =
+  pure synth, notes hold while the key is held. The oscillator is a raw 24-bit phase (DDS); pulse and triangle are
+  shaped from it with saturation and abs, all in the same DSP instructions per voice.
 
 ## State in one look
 
@@ -53,7 +58,8 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 | decode Roland's update, build, install from disk, recovery | works on hardware |
 | Roland-chan boot, home menu, MPC page, record / take-done screens, 7-seg ticker (v0.8) | works on hardware |
 | KEYS: 8 + 4 voices, MIDI keyboard, velocity, S-EDIT filter / attack / release / reverse / loop, PAD BANK (v1.72) | works on hardware |
-| looper: pad layers, overdub, undo / clear on PAD SAMPLING (v0.9b) | built, emulator-tested, **not flashed** |
+| DDS-DSP: saw / pulse + PW / triangle / detuned unison per voice, layered with the sample (v1.81) | works on hardware |
+| looper: pad layers, overdub, undo / clear on PAD SAMPLING (v0.9b) | on the card since v1.8, **hw test pending** |
 | H8S disassembler / xref / assembler / emulator, ESP2 DSP decoder and simulator | work, used for all of the above |
 
 Open points for whoever picks it up:
@@ -98,7 +104,7 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.72; v0.7b-e are LCD diagnostics) |
+| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.81; v0.7b-e are LCD diagnostics) |
 | `tools/esp.py`, `tools/dspdump.py`, `tools/fxcapture.py` | ESP2 DSP decoder / disassembler / cycle simulator; DSP programs out of the image; live FX programs captured by running the stock loader in the emulator |
 | `tools/keysdsp.py`, `tools/test_v10.py` | our DSP1 sampler program (+ model test) and the KEYS end-to-end test |
 | `tools/gfxlib.py`, `tools/ui_gfx.py` | graphics engine (framebuffer, fonts, icons, LCD packing) and the mockup renderer |
@@ -144,7 +150,12 @@ Also fixed on the way: since v0.4 our RAM sat inside the stock 2000-record event
   Hardware fixes on the way: no general mc3 on DSP1 (all voices on mc2), phase stored raw (notes froze after 0.74 s),
   per-channel pass-through, idle voices hard-muted (they replayed the delay RAM quietly), PAD BANK handled inside KEYS.
 
-Built and emulator-tested only (never on the unit):
+- **v1.8-v1.81 DDS-DSP, confirmed on the unit 2026-10-14** ("works now, no back noise"): oscillators in every voice
+  (the voice block grew from 44 to 57 DSP words). On the unit idle voices droned their last notes' oscillators,
+  silent in the model: idle voices now also freeze their oscillators, and the synth's scratch cells moved out of IRAM
+  0xB0-0xEF, which no Roland DSP1 program uses. 7-segment R and M redrawn.
+
+On the card, not tested yet:
 - **v0.9b looper:** PAD SAMPLING tap = REC / PLAY / DUB, double tap = stop, hold = undo / clear; layers are pads.
 
 ## TODO
@@ -157,5 +168,9 @@ Built and emulator-tested only (never on the unit):
 - [x] Keyboard mode (v1.0-v1.72, works on hw): 8 + 4 voices, MIDI keyboard, velocity, S-EDIT filter / attack /
   release / reverse / loop / THRU, PAD BANK.
 - [ ] Keyboard next: resample the keys' output, stock FX back after KEYS, longer samples, MIDI channel setting.
+- [x] DDS-DSP (v1.8-v1.81, works on hw): saw / pulse + PW / triangle / unison + detune / octave, sample layer.
+- [ ] DDS next: filter envelope + LFO (v1.9), 2-op FM + wavetable from a sample (v2.0), VARI PITCH screen rebuild.
+- [ ] Looper v2: 4 loops synced to loop 1, faders A-D, ASSIGN menu (single-switch mode), per-loop FX
+  (plan in `LOOPER_DESIGN.md`).
 - [ ] Strip the groove/song screens.
 - [ ] Doom.

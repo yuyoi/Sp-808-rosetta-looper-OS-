@@ -250,6 +250,7 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
 ### v1.81 (1181, 2026-10-14): idle oscillators frozen, 7-seg R / M
+- **Confirmed on hw 2026-10-14:** "works now no back noise".
 - **Hw report on v1.8:** synth notes play with the right envelope, but a background drone of the same wave sounds
   under them ("similar issue to earlier with the sample keys mode", i.e. v1.71's idle voices). The model is silent
   there. Reading: v1.72's hard mute (lvlk 0 + g 0) may have worked on hw through g = 0 alone (the sample read frozen
