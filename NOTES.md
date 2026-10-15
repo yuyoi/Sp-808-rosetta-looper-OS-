@@ -319,6 +319,9 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - **KEYS: sample + oscillators**: with SAMPLE and any oscillator on (LA off, loop off) a held note no longer stops at
   the sample end: the sample is cut there (the LA cut, VLAT = VSEND) and the oscillators hold the note. (Found by the
   suite: ENV DECAY/SUSTAIN with SAW + SAMPLE ended at the 439 ms take.)
+- **Validated (2026-10-15 ~02:00):** the full `test_v10.py` suite passes on the v1.91 build staged in work/v191
+  (source commit 4e1cf7d): KEYS, PAD BANK, S-EDIT keys, REVERSE / LOOP, DDS OSC / LA / ENV (decay to half and holding,
+  filter env), routing on enter / exit / mode keys; plus test_route / test_mfx / test_kset / test_padled.
 - Tests: `tools/test_route.py` (ROUTING presets / FX AT / mixer calls / dial step, LAB bars / channel / key names).
 - **S-EDIT on the Mac engine**: same rows and keys as before (RELEASE, THRU / REVERSE / LOOP with ENTER = toggle), then
   CUTOFF / RESO / ATTACK (knobs A / B / C) as read-only rows; no submode menu (engine option `menu=False`, read-only
