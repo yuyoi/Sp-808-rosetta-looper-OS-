@@ -81,7 +81,8 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 | looper: pad layers, overdub, undo / clear on PAD SAMPLING (v0.9b) | on the card since v1.8, **hw test pending** |
 | DDS-DSP tabs LA / ENV, Classic Mac menus, looper stopgap keys (v1.9) | emulator-tested, not on hw yet |
 | ROUTING (Roland's mixer + FX location, presets), LAB (live ADC bars, buttons, LED show), MFX (3 FX insert slots, engine, controls), held keys on the pad LEDs (v1.91) | emulator-tested; menus, LAB BUTTONS / LED SHOW / LCD ICONS / PAD VU and MFX slot select work on hardware (v1.96) |
-| MFX effects per slot: FILTER / DRIVE + CRUSH / DELAY / MOD (v1.97) | emulator-tested, on the card, **ear test pending** |
+| MFX effects per slot: FILTER / DRIVE + CRUSH / DELAY / MOD (v1.97) | slot 1 FILTER / DELAY / MOD **work on hardware**; slots 2/3 silent on the unit, being debugged |
+| KEYS synth only: SAMPLE 0 plays at once, no source pad (v1.98) | emulator-tested, not on hw yet |
 | H8S disassembler / xref / assembler / emulator, ESP2 DSP decoder and simulator | work, used for all of the above |
 
 Open points for whoever picks it up:
@@ -128,12 +129,13 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.97; v0.7b-e are LCD diagnostics) |
+| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.98; v0.7b-e are LCD diagnostics) |
 | `tools/esp.py`, `tools/dspdump.py`, `tools/fxcapture.py` | ESP2 DSP decoder / disassembler / cycle simulator; DSP programs out of the image; live FX programs captured by running the stock loader in the emulator |
 | `tools/keysdsp.py`, `tools/test_v10.py` | our DSP1 sampler program (+ model test) and the KEYS end-to-end test |
 | `tools/mixmap.py` | runs Roland's mixer API in the emulator and maps every parameter onto DSP0 words |
 | `tools/mfxdsp.py`, `tools/test_mfx.py`, `tools/test_fx.py`, `tools/test_route.py`, `tools/test_padled.py` | the MFX DSP1 program (3 insert slots, 4 effects, model + self test) and its tests (MFX engine, effects through the firmware, ROUTING / LAB, pad LEDs) |
 | `tools/gfxlib.py`, `tools/ui_gfx.py` | graphics engine (framebuffer, fonts, icons, LCD packing) and the mockup renderer |
+| `tools/run_all.py`, `tools/test_synth.py` | the whole emulator suite at once with a diff against a baseline; the v1.98 synth-only test |
 | `tools/h8emu.py`, `tools/test_ui.py`, `tools/test_v08.py`, `tools/test_v09.py` | small H8S emulator that runs our code on the PC; screen and looper-session tests |
 | `tools/bootanim.py` | boot animation player + hook; frames from `assets/roland_chan_frames.npz` |
 | `tools/roland_chan.py` | turns the line art into LCD frames (needs the drawing, not included) |
@@ -209,6 +211,12 @@ On the card:
   block, the others are transparent. 3 params per type with their own names and units, defaults on a TYPE change,
   only changed DSP words written. The delay RAM is split between the slots set to DELAY. Emulator: low-pass 200 Hz
   1.08 / 4 kHz 0.02, echo at the set time, two DELAY slots split the RAM, tremolo 0.22..1.0, KEYS round trip clean.
+  **On the unit 2026-10-15:** slot 1 FILTER, DELAY and MOD work ("FX work"; a 6-minute jam through LINE IN), the synth
+  "sounds amazing, like virtual analog, fatter than hell". Slot 2 makes no difference yet (being debugged).
+
+Built, waiting for the card:
+- **v1.98:** KEYS synth only: with DDS-DSP SAMPLE 0 the KEYS page plays at once (no source pad to pick first); raising
+  SAMPLE then picks one with the next pad. The MPC and MFX pages no longer share a cursor byte.
 
 ## TODO
 
