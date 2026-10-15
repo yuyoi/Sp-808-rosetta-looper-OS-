@@ -249,6 +249,19 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.95 (1195, 2026-10-15): data tables word-aligned (v1.94 hw bug)
+- **hw v1.94:** MFX / ROUTING pages show numbers (64, 100) but every name value is blank (ENGINE, SLOT AT, PRESET,
+  FX AT). Slot select itself works.
+- **Cause:** h8asm `align2` guessed the current length and counted `abs24` items (jsr / jmp to a label, 3 bytes)
+  as 0. From the first such jmp on (the v1.91 trampolines) every "aligned" table landed on an odd address
+  (mf_offon 0x17ECE9, rt_locn, lfo_inc, ratio_fine, arp_bpm, bit16 ... all odd).
+- **Why the emulator passed:** the H8S ignores address bit 0 on word / long accesses (reads the even address, no
+  address error); h8emu read the odd address exactly. On hw `mov.l @er2` from the name table built pointers like
+  0x001817 -> empty strings. The same hits every word table read: LFO rates, pitch ratios, ARP tempo, bit masks.
+- **Fix:** `align2` is now a layout-time item (pads by the real pc); h8emu masks bit 0 on word / long accesses like
+  the chip and logs each odd one in `Emu.odd` (test_v10 prints it). v1.94 under the strict emulator reproduces
+  the hw failure (row_str reads 0x001817 on the MFX page); v1.95 renders OFF / MASTER / 64 with no odd accesses.
+
 ### v1.94 (1194, 2026-10-15, emulator-tested, NOT on hw): voice modes MONO / GLIDE / UNISON
 - **Validated (2026-10-15 ~03:15):** build staged in work/v194 (source 74978c7, also has the MFX pad switches and the
   boot sweep): the full test_v10 suite passes (same results as v1.91) and so do test_route / kset / padled / lfo /

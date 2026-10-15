@@ -27,17 +27,13 @@ class Asm:
         if not hasattr(self, '_names'): self._names = set()
         assert name not in self._names, 'duplicate label %s' % name
         self._names.add(name); self.items.append(('L', name))
-    def here_len(self):
-        return sum(len(p) if k == 'b' else (4 if k in ('br16', 'abs32') else 2 if k == 'br8' else 0)
-                   for k, p in self.items)
-
     # --- data ---
     def string(self, s): self.raw(s.encode('ascii') + b'\0')
     def dc_l(self, v):                                  # 32-bit data word: a number or a label's address
         if isinstance(v, str): self.items.append(('abs32', v))
         else: self.raw(struct.pack('>I', v & 0xFFFFFFFF))
-    def align2(self):
-        if self.here_len() & 1: self._b(0)
+    def align2(self): self.items.append(('A', 2))     # pad to an even address, decided at layout (v1.95: the
+                                                     # old length guess missed jsr/jmp abs24 -> odd tables on the H8S)
 
     # --- instructions ---
     def push_l(self, n): self._b(0x01, 0x00, 0x6D, 0xF0 | n)
@@ -157,6 +153,7 @@ class Asm:
             elif k == 'br8': pc += 2
             elif k in ('br16', 'abs32'): pc += 4
             elif k == 'abs24': pc += 3
+            elif k == 'A': pc += pc & 1
         out = bytearray(); pc = self.base
         for k, p in self.items:              # pass 2: emit
             if k == 'b': out += p; pc += len(p)
@@ -175,4 +172,5 @@ class Asm:
                 out += struct.pack('>I', self.labels[p]); pc += 4
             elif k == 'abs24':
                 out += self.labels[p].to_bytes(3, 'big'); pc += 3
+            elif k == 'A' and pc & 1: out += b'\0'; pc += 1
         return bytes(out)

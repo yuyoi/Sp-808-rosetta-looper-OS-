@@ -16,6 +16,7 @@ ONCHIP = 0xFFF000                                         # on-chip RAM / regist
 class Emu:
     def __init__(self, image):
         self.flash = bytearray(image)
+        self.odd = set()                                     # odd word/long accesses (pc, address)
         self.ram = bytearray(RAM_HI - RAM_LO)
         self.onchip = bytearray(0x1000)
         self.hw = bytearray(0x3000)                          # DSP host port window 0xC00000-0xC02FFF (plain memory)
@@ -46,8 +47,14 @@ class Emu:
         if a >= ONCHIP: self.onchip[a - ONCHIP] = v & 0xFF; return
         if 0xC00000 <= a < 0xC03000: self.hw[a - 0xC00000] = v & 0xFF; return
         raise RuntimeError('write %06X at pc %06X' % (a, self.pc))
-    def rw(self, a): return (self.rb(a) << 8) | self.rb(a + 1)
-    def ww(self, a, v): self.wb(a, v >> 8); self.wb(a + 1, v)
+    # The H8S ignores address bit 0 on word / long accesses (no address error): model that, and log each odd one
+    # (pc, address) in self.odd, because the real unit reads the wrong bytes there (v1.94 tables bug).
+    def rw(self, a):
+        if a & 1: self.odd.add((self.pc, a & 0xFFFFFF)); a &= ~1
+        return (self.rb(a) << 8) | self.rb(a + 1)
+    def ww(self, a, v):
+        if a & 1: self.odd.add((self.pc, a & 0xFFFFFF)); a &= ~1
+        self.wb(a, v >> 8); self.wb(a + 1, v)
     def rl(self, a): return (self.rw(a) << 16) | self.rw(a + 2)
     def wl(self, a, v): self.ww(a, v >> 16); self.ww(a + 2, v & 0xFFFF)
 

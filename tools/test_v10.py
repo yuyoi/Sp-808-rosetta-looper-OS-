@@ -410,6 +410,7 @@ def main(image_path, out):
     sim.run(10); print('back (idle on page KEYS) -> route code %02X' % e.rb(bm.FX_ROUTE_CODE), 'active', e.rb(bm.KACTIVE))
     sim.key(bm.K_EXIT); sim.run(10)
     print('exit      page', e.rb(bm.PAGE), 'routing calls', sim.routing, 'route code %02X' % e.rb(bm.FX_ROUTE_CODE))
+    print('odd word/long accesses (wrong bytes on the H8S):', ['pc %06X @%06X' % x for x in sorted(e.odd)] or 'none')
     print(ui_gfx.render(shots, out))
 
 

@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1194, '1.94'              # 1.94 = voice modes MONO / GLIDE / UNISON (1.93 ARP, 1.92 LFO)
+VERSION, VER_TXT = 1195, '1.95'              # 1.95 = data tables word-aligned (h8asm align2 skipped jsr/jmp abs24); 1.94 voice modes
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
