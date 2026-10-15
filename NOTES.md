@@ -296,6 +296,13 @@ Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note f
     KEYS round trip).
 
 #### Lane LOOP: Looper v2
+- **Timing debug build (2026-10-15, for one hw run):** each trace entry also stores ms since the last looper press
+  (LV_TRT 16 words, LV_T0 = tick of the press, both in the LOOP RAM block). ENTER on the LOOP page cycles
+  OFF -> VALUES ("Xhhhh") -> MS ("Xdddd", 9999 max) -> OFF. New trace points: K = take armed (0x22 enter, value
+  LSTATE), I = first record idle (value = 0x4277D1 byte << 8 | trigger mode 0x4277C9), Q = a press during a take
+  (value = REC_MS), B = stock write begins (0x23 event 2), N = layer note-on (value = layer). Close-tap pipeline:
+  R Q S E P B W D G N. Emulator (stock faked, so near-zero cost): note-on 105 ms after the press; DUB arms at 0,
+  I at 19, auto stop at loop + 150 ms. Test: tools/test_loop_timing.py.
 - **v0.9b HW TEST (2026-10-15, v1.97 on the card, PAD SAMPLING):** layer 1 records and loops OK; **loop 1 keeps
   playing during DUB** and the screen shows DUB (overdub-while-playing works on hw). Bugs: (1) DUB never ends by itself
   after one loop; (2) a tap during DUB ends it but the layer is lost; (3) lag = a gap between the closing tap and
