@@ -296,6 +296,29 @@ Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note f
     KEYS round trip).
 
 #### Lane LOOP: Looper v2
+- **RE pass 2 (2026-10-15, emulator): voice slot n = mixer group n = fader n. PROVEN, with one catch.**
+  - Fader poll **0x13570E**: table 0x164C42 = (ADC, strip) pairs 0/0 1/1 2/2 3/3 5/6; ADC 4 -> strip 4 (MIC/LINE) or 5
+    (if 0x1364BC != 0). Strip records 0x426DDE + 0x12 * strip (+2 last raw, +4 value). Change -> 0x135806(strip, flags)
+    -> 0x135882 -> function table 0x164C54 (10 B: mixer idx, idx for strip 6, fn, arg); LEVEL = entry 12 -> 0x13593E.
+  - Strip -> group table **0x164C4C = 00 01 02 03 04 FF 06** (strip 5 = "pads": FF = applied to every slot in 0x43B627).
+  - Groups 0-3 skip 0x11F2AE: 0x13593E reads status 0x14E83A(group) (bit 7 -> level 100, bit 0 -> fader value
+    (strip +4) * 0x43B629[group] via 0x14E476, else 0), then **0x120790(group, e0 level, r1 pan)**: stores mixer
+    params idx 11/12 (0x422018 + 0x2A * g + 22/24) and writes the DSP0 word from table 0x1601DE = w171 / w183 / w195 /
+    w1A7 / w1B9: the channel LEVEL words of the mixer map. 0x1207D6 = a coefficient pair from 0x1601E8.
+  - Emulator (fader poll with 0x11F2AE / 0x120790 / 0x1207D6 stubbed to log): ADC0 -> LVL(g0), ADC1 -> LVL(g1);
+    ADC4 -> MP(g4, 11), ADC5 -> MP(g6, 0) (master).
+  - **Catch: 0x43B627 = "pad plays on slot n" mask** (set by 0x14E9F4(slot) from the pad voice start at 0x14ECF4,
+    cleared by 0x14E9C0 at voice stop; bits from 0x16A18A = 1/2/4/8; 0x43B628 gets the same bits). With bit n set,
+    fader n is **ignored** for group n (emulator: ADC0 -> nothing) and strip 5's level goes there instead.
+    Roland's own pad-level code writes group = slot, which also proves slot n's stream comes out of channel block n.
+  - **v2 recipe:** (1) 0x14EC7E `jsr 0x1000A6` -> `lv_alloc` (loop pad k -> slot k); (2) 0x14ECF4 `bsr 0x14E9F4`
+    (4 bytes, room for a jsr) -> `lv_mask`: stock, then for a loop slot clear its bit in 0x43B627 and call
+    0x135806(k, 0x1000) so fader k applies at once. Still to check: status 0x14E83A for a pad slot (bit 0 set?),
+    what 0x43B629[n] holds for pads, and the other 0x14E9F4 callers (0x14EDB0, 0x14F072, 0x14F368) re-setting the bit.
+  - **Other allocator caller 0x14EEB8** = 0x14EEAA, a one-voice special start (class 0, owner 0x40, slot kept in
+    0x43B652, stop 0x14EF38). Installed by 0x138438 (from 0x137EBA, flags 0x427578 bit 1 / 0x4278E2 bit 3) as the
+    0x4275AA hook for pad @0x403242 (first free pad, else 15). Not identified yet (a monitor / preview voice?).
+    Risk for v2: when all 4 slots are busy it steals one through 0x1002A6, so it could take a loop's slot.
 - **2026-10-15, user decisions for v2:** faders = loop n pinned to the Tr.n voice (stock faders); the 4 loops = fixed
   pads in their own pad bank; loop select = simple first (an on-screen selector, maybe "move a fader to select" or
   "next loop at the wrap" later). v0.9b hw test list handed to the user (runs through the lead). RE only until the
