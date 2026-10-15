@@ -253,6 +253,15 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note first under each heading.
 
 #### Lane LEAD: KEYS / synth, merges, versions, the card
+- **MIDI remote keys + hardware-in-the-loop (2026-10-15, user: "looper trigger via MIDI so the loop lane can fix the
+  loop logic itself"; PC = Focusrite 6i6 audio + MIDI):** a note on MIDI channel 16 = key code <note>, channel 15 =
+  0x80 + note, velocity 64+ = SHIFT, note-off / velocity 0 = release. `m_on_tr` / `m_off_tr` queue them (channels
+  15/16 never reach KEYS or the stock pad handlers) into an 8-word ring; the OS key dispatcher's `jsr 0x1311C6` (next
+  key from the scanner, at 0x13F2FC) now calls `rk_getkey`, which returns a queued raw key first. So the key goes
+  through the whole stock path (0x131556 group info, KEYMASK, group handlers g1 / g2 / g8, the screen) like a press.
+  Test: `test_remote.py` runs the stock dispatcher: a remote PAD SAMPLING tap arrives at g2 as 0x0022 / 0x4022.
+  PC side: `tools/sp808_midi.py` (winmm via ctypes, no packages): `ports`, `key PADSMPL`, `run "PADSMPL 120; wait
+  4000; ..." --rec out.wav` records "Analogue 1 + 2 (Focusrite)" and logs each event's sample index (device counter).
 - **Synth only (2026-10-15, user: "needs me to press a sample pad to get any sound"):** with SAMPLE 0, keys_enter goes
   straight to PLAY with no source (`keys_synth_only`, KNOSMP = 1). The page shows SYNTH ONLY; the sample layer is
   muted and voices hold while held, so the stale delay RAM is never heard. Raising SAMPLE while KNOSMP is set =

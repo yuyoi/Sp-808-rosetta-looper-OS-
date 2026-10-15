@@ -544,6 +544,13 @@ KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BA
 # v1.98 synth only: with SAMPLE 0 the KEYS page plays at once, no source pad. Raising SAMPLE then = pick a pad first.
 KNOSMP = LANE_RAM['lead'][0]                                            # 1 = playing without a source sample
 INIT_LEAD += [(KNOSMP, 0)]
+# v1.98 MIDI remote keys (hardware-in-the-loop tests from the PC): a note on MIDI channel 16 = that key code (0x00-0x7F),
+# channel 15 = code 0x80 + note; velocity 64+ = with SHIFT, note-off / velocity 0 = the release. They go into a ring that
+# the OS's own key dispatcher reads before the key scanner (its jsr 0x1311C6 -> rk_getkey), so they act like real keys.
+RKR, RKW = LANE_RAM['lead'][0] + 1, LANE_RAM['lead'][0] + 2                # ring read / write index (0-7)
+RKQ = LANE_RAM['lead'][0] + 0x10                                         # 8 raw key words
+GETKEY, GETKEY_CALL = 0x1311C6, 0x13F2FC                                  # stock: next key (0 = none); its call site
+INIT_LEAD += [(RKR, 0), (RKW, 0)]
 STRS_LEAD += [('s_ksynth', 'SYNTH ONLY')]
 KSTAB = RAM_BASE + 0x45C
 KSET_TABS = [('KEYS SOUND', [('RELEASE', KREL, 0, len(REL_MS) - 1, None, ('t', 'rel_ms', 'MS')),
@@ -2291,11 +2298,15 @@ def build():
 
     # ---- MIDI: the stock note-on / note-off handlers are replaced by these while KEYS plays (table 0x164B88) ----
     a.label('m_on_tr')                         # r0l = channel; note at MIDI_NOTE, velocity at MIDI_VEL
+    a.cmp_b_imm(14, 'r0l'); a.bcs('m_on_k'); a.bra16('rk_on')                      # channels 15 / 16: remote keys
+    a.label('m_on_k')
     a.mov_b_from_abs(KACTIVE, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.beq('m_on_stock')
     a.mov_b_from_abs(KSTATE, 'r1l'); a.cmp_b_imm(KS_PLAY, 'r1l'); a.bne('m_on_stock')
     a.mov_b_from_abs(MIDI_VEL, 'r1l'); a.bra('m_queue')
     a.label('m_on_stock'); a.jmp(STOCK_M_ON)
     a.label('m_off_tr')
+    a.cmp_b_imm(14, 'r0l'); a.bcs('m_off_k'); a.bra16('rk_off')
+    a.label('m_off_k')
     a.mov_b_from_abs(KACTIVE, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.beq('m_off_stock')
     a.mov_b_from_abs(KSTATE, 'r1l'); a.cmp_b_imm(KS_PLAY, 'r1l'); a.bne('m_off_stock')
     a.mov_b_imm(0, 'r1l'); a.bra('m_queue')
@@ -2309,6 +2320,27 @@ def build():
     a.mov_b_from_abs(MWR, 'r0l'); a.add_b_imm(1, 'r0l'); a.and_b_imm(15, 'r0l'); a.mov_b_to_abs('r0l', MWR)
     a.pop_l(2)
     a.label('m_out'); a.rts()
+    a.label('rk_on'); a.push_l(1)                                                   # r0l = 14 / 15 (MIDI ch 15 / 16)
+    a.mov_b_from_abs(MIDI_VEL, 'r1h'); a.cmp_b_imm(0, 'r1h'); a.beq('rk_rel')       # velocity 0 = note-off
+    a.cmp_b_imm(64, 'r1h'); a.bcs('rk_pl'); a.mov_b_imm(0x01, 'r1h'); a.bra('rk_code')   # 64+: SHIFT (0x100)
+    a.label('rk_pl'); a.mov_b_imm(0, 'r1h'); a.bra('rk_code')
+    a.label('rk_off'); a.push_l(1)
+    a.label('rk_rel'); a.mov_b_imm(0x40, 'r1h')                                     # release (0x4000)
+    a.label('rk_code'); a.mov_b_from_abs(MIDI_NOTE, 'r1l')
+    a.cmp_b_imm(15, 'r0l'); a.beq('rk_put'); a.or_b_imm(0x80, 'r1l')                # channel 15: codes 0x80-0xFF
+    a.label('rk_put'); a.push_l(2)                                                  # r1 = raw key -> ring (full: drop)
+    a.mov_b_from_abs(RKW, 'r0l'); a.mov_b_rr('r0l', 'r0h'); a.add_b_imm(1, 'r0h'); a.and_b_imm(7, 'r0h')
+    a.mov_b_from_abs(RKR, 'r2l'); a.cmp_b_rr('r2l', 'r0h'); a.beq('rk_full')
+    a.mov_b_rr('r0l', 'r2l'); a.extu_w(2); a.extu_l(2); a.add_l_rr(2, 2); a.add_l_imm(RKQ, 2); a.mov_w_st(1, 2)
+    a.mov_b_to_abs('r0h', RKW)
+    a.label('rk_full'); a.pop_l(2); a.pop_l(1); a.rts()
+    a.label('rk_getkey')                       # the dispatcher's "next key": a remote key first, else the key scanner
+    a.mov_b_from_abs(RKR, 'r0l'); a.mov_b_from_abs(RKW, 'r0h'); a.cmp_b_rr('r0h', 'r0l'); a.bne('rkg_one')
+    a.jmp(GETKEY)
+    a.label('rkg_one'); a.push_l(1)
+    a.mov_b_rr('r0l', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_rr(1, 1); a.add_l_imm(RKQ, 1); a.mov_w_ld(1, 0)
+    a.mov_b_from_abs(RKR, 'r1l'); a.add_b_imm(1, 'r1l'); a.and_b_imm(7, 'r1l'); a.mov_b_to_abs('r1l', RKR)
+    a.pop_l(1); a.mov_w_rr(0, 0); a.rts()                                           # Z clear: a key
 
     a.label('keys_signal')                     # r0 = 1 if any readback byte's low nibble is all ones
     for k in range(4):
@@ -4222,6 +4254,9 @@ def main(raw, outdir):
     o = MIDI_TABLE - 0x100000                   # MIDI note-off / note-on handlers -> our trampolines
     assert struct.unpack('>II', img[o:o + 8]) == (STOCK_M_OFF, STOCK_M_ON), 'MIDI handler table'
     img[o:o + 8] = struct.pack('>II', labels['m_off_tr'], labels['m_on_tr'])
+    o = GETKEY_CALL - 0x100000                  # v1.98 remote keys: the dispatcher asks rk_getkey first
+    assert bytes(img[o:o + 4]) == bytes([0x5E]) + GETKEY.to_bytes(3, 'big'), 'key dispatcher call site'
+    img[o:o + 4] = bytes([0x5E]) + labels['rk_getkey'].to_bytes(3, 'big')
     assert CODE_BASE + len(blob) < ANIM_BASE
     def ram_init(a):                        # once per power-on, before the animation
         a.mov_l_imm(MAGIC, 0); a.mov_l_to_abs(0, CANARY)

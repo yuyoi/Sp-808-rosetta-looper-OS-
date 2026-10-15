@@ -7,7 +7,7 @@ shift whenever the code size changes, so read the diff, don't count it. test_v10
 import argparse, concurrent.futures as cf, difflib, os, re, runpy, subprocess, sys, time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
-QUICK = ['test_lfo', 'test_mfx', 'test_fx', 'test_route', 'test_kset', 'test_arp', 'test_padled', 'test_voice', 'test_synth']
+QUICK = ['test_lfo', 'test_mfx', 'test_fx', 'test_route', 'test_kset', 'test_arp', 'test_padled', 'test_voice', 'test_synth', 'test_remote']
 FULL = ['test_v10'] + QUICK                     # longest first
 
 
