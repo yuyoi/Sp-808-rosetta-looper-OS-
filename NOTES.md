@@ -850,6 +850,10 @@ working while pads play; to give each loop its own fader the looper has to pin i
 The binding happens in 0x14ED46(r6l = voice, r6h = channel; er1 = params): 0x43B62D[voice] = param +2, voice setup
 0x14EA28, then 0x43B635[ch] = voice, 0x43B631[voice] = ch + 0x10. The channel comes from its caller in the pad path
 (object method 0x13749E): the place to pin a layer to Tr.A-D for Looper v2 (per-loop faders / per-loop FX slots).
+0x13749E itself only queues: it sets bit 2 of byte +1 in the pad's play record (0x4275AE + 14 * pad) and calls
+0x150CEE; the stream engine binds a channel later. 0x14ED46's direct callers are 0x138CAC (sample preview: channel
+from @0x42769D, voice 0) and 0x13AD3C. Next step for Looper v2: find where the queued pad request gets its channel
+(the 0x4275AE records' consumer) and hook it so loop layers keep fixed channels.
 
 ## Hardware buses
 | addr | what |
