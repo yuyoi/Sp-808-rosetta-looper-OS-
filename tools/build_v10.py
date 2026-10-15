@@ -504,6 +504,16 @@ MF_NENT = len(mfxdsp.ENTRIES)
 # group is masked (0x427906 = FFFF), so each key comes to our screen as event 9. BTMASK = the mask before, BTON = set.
 KEYMASK = 0x427906
 BTMASK, BTON = RAM_BASE + 0x504, RAM_BASE + 0x506
+# ---- parallel lanes (2026-10-15, PARALLEL.md): RAM 0x000-0x7FF is taken; each lane allocates only inside its block,
+# and puts its power-on values / strings in its own list (one line each, so merges don't collide).
+LANE_RAM = dict(lead=(RAM_BASE + 0x800, RAM_BASE + 0xC00), mfx=(RAM_BASE + 0xC00, RAM_BASE + 0x1000),
+                loop=(RAM_BASE + 0x1000, RAM_BASE + 0x1800))                 # 0x1800-0x1FFF spare, FB at 0x2000
+INIT_LEAD = []                                  # (address, byte) set at power-on, lead lane (KEYS / synth)
+INIT_MFX = []                                   # MFX lane
+INIT_LOOP = []                                  # Looper v2 lane
+STRS_LEAD = []                                  # (label, text): lead lane
+STRS_MFX = []                                   # MFX lane
+STRS_LOOP = []                                  # Looper v2 lane
 FX_LOAD_PATCH, FX_PATCH_BUF = 0x1081D6, 0x42235E   # stock: load the FX patch at er0 (algorithm word first); current patch
 MF_CODE_NAMES = ['OFF', 'SEND/RETURN', 'TR.A PRE-EQ', 'TR.A POST-EQ', 'TR.B PRE-EQ', 'TR.B POST-EQ', 'TR.C PRE-EQ',
                  'TR.C POST-EQ', 'TR.D PRE-EQ', 'TR.D POST-EQ', 'MIC/LINE PRE-EQ', 'MIC/LINE POST', 'MASTER', 'RECORD',
@@ -4132,6 +4142,7 @@ def build():
                    ('s_kbank', 'BANK'), ('s_kpad', 'PAD'), ('s_kset', 'KEYS SOUND'), ('s_more', '>'), ('s_khelp', 'DIAL=BANK  HIT A PAD'), ('s_kbsel', 'PAD=BANK PAD BANK=+16'), *MAC_STRS, ('s_lbhelp', 'PRESS ANY BUTTON  EXIT=HOME'), ('s_ledhelp', '</>=STEP  UP=CHASE  DOWN=STOP'), ('s_ledchase', 'CHASE...'), ('s_sghelp1', '</>=NEXT BIT  UP=ALL  DOWN=ONE'), ('s_sghelp2', 'WATCH THE 7-SEGMENT LINE'), ('s_vuhelp1', 'PADS 1-8 = LEFT  9-16 = RIGHT'), ('s_vuhelp2', 'THE INPUT METER ON THE PADS'), ('s_ksamp', 'SAMPLING...'),
                    ('s_kwait', 'EXIT=CANCEL'), ('s_kplay', 'PLAY SRC'), ('s_kphelp', 'SHIFT+EXIT=PICK  UP/DN'), ('s_krel', 'REL')):
         a.label(lbl); a.string(s)
+    for lbl, s in STRS_LEAD + STRS_MFX + STRS_LOOP: a.label(lbl); a.string(s)        # the lanes' strings
     return a.assemble(), a.labels
 
 
@@ -4209,6 +4220,8 @@ def main(raw, outdir):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         a.mov_b_imm(0, 'r0l')
         for v_ in range(NV): a.mov_b_to_abs('r0l', VLAS + v_)
+        for v_, val_ in INIT_LEAD + INIT_MFX + INIT_LOOP:                           # the lanes' power-on values
+            a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
     ablob, alabels = bootanim.patch(img, ANIM_BASE, ram_init)
     assert ANIM_BASE + len(ablob) < DSP_BASE
     p = SPLASH2_AT - 0x100000

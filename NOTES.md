@@ -249,6 +249,18 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### Lanes (2026-10-15 on): parallel sessions, each writes notes only under its own heading
+Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note first under each heading.
+
+#### Lane LEAD: KEYS / synth, merges, versions, the card
+- (nothing yet)
+
+#### Lane MFX: effect modes and sound
+- (nothing yet)
+
+#### Lane LOOP: Looper v2
+- (nothing yet)
+
 ### v1.97 (1197, 2026-10-15): MFX effects (user: per-slot TYPE; FILTER, DRIVE/LO-FI, DELAY, MOD; tested via line in)
 - **DSP1 program (tools/mfxdsp.py, 0x3C..0x28F of 0x2F1):** every slot runs FILTER -> DRIVE+CRUSH -> MOD -> DELAY;
   the TYPE switches one block on, the others are transparent by coefficients (OFF = exact x1, checked).
