@@ -95,6 +95,8 @@ Open points for whoever picks it up:
 - Recording into a used pad skips the stock "Overwrite?", so the old wave may be orphaned (stock CLEANUP DISK).
 - LCD width: 132 or 136 px (the stock logo is centred on 136).
 
+<p align="center"><img src="assets/sp808ex_ad.jpg" width="640" alt="The SP-808EX with Rosetta OS in a glitchy fan-made ad"></p>
+
 ## Use
 
 You must supply Roland's **own update file** (`SP808v1050.zip`, SP-808 OS v1.05). It is Roland's copyrighted code
