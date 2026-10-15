@@ -56,8 +56,8 @@ def main(image_path, out):
           [x for x in sim.dsp_log if x[1] == 'load'], 'FX_CUR %04X' % e.rw(bm.FX_CUR))
     print('           routing', [r[1:] for r in sim.routing[n:]], 'stock loc idx', e.rb(bm.MIXER_LOC_IDX),
           'saved', e.rb(bm.MSAVEIDX))
-    w0 = (bm.MFX_PARAMS['m0_l'][1])
-    print('           program at 0x3C..: %s' % ['%07X' % sim.prog[w] for w in range(0x3C, 0x41)], 'm0_l coef', sim.prog[w0] & 0xFF)
+    w0 = (bm.MFX_PARAMS['m0_odl'][1])
+    print('           program at 0x3C..: %s' % ['%07X' % sim.prog[w] for w in range(0x3C, 0x41)], 'm0_odl coef', sim.prog[w0] & 0xFF)
     print('slots      gains', slot_gains(sim), '(expect 1.0 1.0 1.0)')
     shots.append(('MFX on', sim.shot()))
     sim.key(bm.K_DOWN); sim.key(bm.K_DOWN); sim.key(bm.K_DOWN)            # SLOT 2 AT
@@ -72,7 +72,7 @@ def main(image_path, out):
     shots.append(('slot 2 at TR.A POST, level 32', sim.shot()))
     for _ in range(3): sim.key(bm.K_DOWN)
     sim.run(5); shots.append(('FX CHAIN scrolled', sim.shot()))
-    sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(5)   # CONTROLS
+    sim.key(bm.K_ENTER); [sim.key(bm.K_DOWN) for _ in range(4)]; sim.key(bm.K_ENTER); sim.run(5)   # CONTROLS (tab 4)
     for _ in range(3): sim.key(bm.K_RIGHT)                   # KNOB A -> SLOT 3 LEVEL
     e.wb(bm.ADC_TAB + 6, 200); sim.run(30)
     print('KNOB A     -> target', e.rb(bm.MCTRL), bm.MF_TGTS[e.rb(bm.MCTRL)], 'raw 200 -> SLOT 3 LEVEL', e.rb(bm.MLVL + 2),
@@ -96,7 +96,7 @@ def main(image_path, out):
     sim.key(bm.K_LEFT); sim.run(20); print('PADS PLAY  lit', lit(), '(pads given back)')
     n0 = len(sim.dsp_log); e.s16(0, 0x1000 | (w0 << 2)); e.s16(8, 0x7F00)
     sim.call('gate_coef'); print('gate       Roland write while MFX on -> %d writes (expect 0)' % (len(sim.dsp_log) - n0))
-    sim.key(bm.K_ENTER); sim.key(bm.K_UP); sim.key(bm.K_ENTER); sim.run(5)     # FX CHAIN
+    sim.key(bm.K_ENTER); [sim.key(bm.K_UP) for _ in range(4)]; sim.key(bm.K_ENTER); sim.run(5)     # FX CHAIN
     n = len(sim.routing)
     sim.key(bm.K_LEFT); sim.run(10)                          # ENGINE OFF
     print('ENGINE OFF MON', e.rb(bm.MON), 'loaded', e.rb(bm.MLOADED), 'KGATE %02X' % e.rb(bm.KGATE), 'routing',

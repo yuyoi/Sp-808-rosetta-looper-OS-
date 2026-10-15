@@ -249,6 +249,35 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.97 (1197, 2026-10-15): MFX effects (user: per-slot TYPE; FILTER, DRIVE/LO-FI, DELAY, MOD; tested via line in)
+- **DSP1 program (tools/mfxdsp.py, 0x3C..0x28F of 0x2F1):** every slot runs FILTER -> DRIVE+CRUSH -> MOD -> DELAY;
+  the TYPE switches one block on, the others are transparent by coefficients (OFF = exact x1, checked).
+  FILTER = Chamberlin SVF per channel (15-bit f / q, LP / BP / HP), DRIVE = 2 gain stages into saturation (to 48 dB)
+  + one-pole TONE + CRUSH (sample & hold through delay RAM: write every sample, READvar at n mod 2^k), MOD = triangle
+  LFO into mc0 / mc1 gains (tremolo / auto-pan / ring), DELAY = one mono line, READvar + interpolation, offset glides
+  (1/128 per sample), feedback, MIX; slot LEVEL folded into the output dry / wet.
+- **Host:** mfx_apply -> MVAL (31 values from tables, mfxdsp.values is the Python twin) -> mfx_write sends only the
+  words whose (coef, shift) changed (MSHAD shadow; a CUTOFF step = 4 writes). TYPE change loads that type's default
+  params (P_DEFAULT) and re-splits the delay RAM between the DELAY slots (mf_regt / mf_regp by mask, MREGM).
+  CONTROLS: 13 targets (levels + SLOT k P j, scaled to the param's range by TYPE). UI: MFX tabs FX CHAIN, SLOT 1-3
+  (rows TYPE + 3 params whose labels / displays follow the TYPE: Mac engine 'dyn' rows), CONTROLS.
+- **Delay RAM rules learned (all in the model, KEYS-proven ranges):**
+  - READvar offsets kept < 65536 (KEYS proved that range on hw): crush regions 8..472, dummy lines 480 / 488 / 496,
+    delay lines 512..65520 split 1 / 2 / 3 ways (max 1480 / 740 / 490 ms).
+  - Data written at offset w moves up one offset per sample and is overwritten by the next writer above it after
+    (w_next - w) samples: a line's room is the gap to the next WRITE offset above (all three slots wrote at 512
+    once -> no echo).
+  - The loader can't write E fields: after our load every word's E field is cleared (stride-5 group writes) and ours
+    are set; KEYS load and MFX OFF clear ours (stale groups would start transactions in the other program).
+  - The delay line records in every TYPE: switching to DELAY plays what passed ~D ago (fine, like trails).
+- **ESP facts found on the way:** op 0x60/0x64 input `~x & 0x7FFFFF` is 1 - x, not -x (my first offset math was off
+  by -2^29); keep negative states and multiply by -128 (KEYS' -X trick). A multiply and its lo7 / mulcoeff dmac must be
+  adjacent: Seq.pair() keeps them out of the 0xF1-0xFF gap.
+- **Emulator:** mfxdsp selftest (all blocks), tools/test_fx.py through the firmware: LP 200 Hz 1.08 / 4 kHz 0.018,
+  HP 0.16 / 1.05, param clamp, 4 writes per CUTOFF step, DRIVE clips, DELAY echo 13264 for 13272 (16-sample steps),
+  split regions + WRITE bases rewritten, tremolo 0.22..1.0, bypass x1, knobs -> params, KEYS round trip clean, no odd
+  accesses. **Not on hw yet:** slots 2/3 (GRAM path) and everything by ear.
+
 ### v1.96 (1196, 2026-10-15): LAB BUTTONS sees every key
 - **hw v1.95:** menus OK (names back). LAB BUTTONS stayed empty: the key dispatcher 0x13F2F0 gives each key to
   its group handler first (KEYGROUP_TABLE, 16 groups) and only sends it to the screen (event 9) when the handler

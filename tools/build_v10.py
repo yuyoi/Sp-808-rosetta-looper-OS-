@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1196, '1.96'              # 1.96 = LAB BUTTONS sees every key (key groups masked); 1.95 word-aligned tables
+VERSION, VER_TXT = 1197, '1.97'              # 1.97 = MFX effects: FILTER / DRIVE+CRUSH / DELAY / MOD per slot; 1.96 BUTTONS
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -491,6 +491,15 @@ MON, MLOADED, MTAB, MCUR = (RAM_BASE + 0x430 + i for i in range(4))
 MSLOT, MLVL, MCTRL, MCLAST = RAM_BASE + 0x434, RAM_BASE + 0x437, RAM_BASE + 0x43A, RAM_BASE + 0x440   # 3, 3, 6, 6 bytes
 MSAVEIDX, MSAVEFLG = RAM_BASE + 0x446, RAM_BASE + 0x447   # the stock FX LOCATION before MFX went on
 MPADS, MBYP, MPLIT = RAM_BASE + 0x500, RAM_BASE + 0x501, RAM_BASE + 0x502   # pads 1-3 = slot switches; bypassed bits
+# MFX effects (v1.97, mfxdsp.py): per slot a TYPE (OFF / FILTER / DRIVE / DELAY / MOD) and three params. mfx_vals turns
+# them into the value vector MVAL (mfxdsp.values does the same in Python), mfx_write sends the program words that
+# changed (MSHAD = what each slot's words hold). MREGM = the slots whose TYPE is DELAY (delay RAM split between them).
+MTYPE, MREGM, MP, MAPS = RAM_BASE + 0x510, RAM_BASE + 0x513, RAM_BASE + 0x514, RAM_BASE + 0x51D   # 3, 1, 9, 1 bytes
+MEFT, MEFL, MVAL = RAM_BASE + 0x51E, RAM_BASE + 0x51F, RAM_BASE + 0x520     # effective type / level, 31 values
+MPP, MDRY, MWET, MDLY, MRB, MRE = (RAM_BASE + 0x5F0, RAM_BASE + 0x5F3, RAM_BASE + 0x5F4, RAM_BASE + 0x5F6,
+                                   RAM_BASE + 0x5F8, RAM_BASE + 0x5FA)   # p1-p3, dry, wet, delay (w), region (w, w)
+MSHAD = RAM_BASE + 0x600                                                    # 3 x len(ENTRIES) x (coef, shift)
+MF_NENT = len(mfxdsp.ENTRIES)
 # LAB BUTTONS (v1.95): the OS key groups eat most keys before the screen sees them; while BUTTONS is shown every
 # group is masked (0x427906 = FFFF), so each key comes to our screen as event 9. BTMASK = the mask before, BTON = set.
 KEYMASK = 0x427906
@@ -501,11 +510,22 @@ MF_CODE_NAMES = ['OFF', 'SEND/RETURN', 'TR.A PRE-EQ', 'TR.A POST-EQ', 'TR.B PRE-
                  'AUX-OUT']                                          # by mixer code 0..14
 MF_C2I = [15, 0, 6, 7, 8, 9, 10, 11, 12, 13, 4, 5, 1, 2, 3]       # mixer code -> stock FX LOCATION index
 MF_SRC = [('KNOB A', 6), ('KNOB B', 7), ('KNOB C', 8), ('BEAM L', 9), ('BEAM R', 10), ('FOOT SW', 11)]   # (name, ADC)
-MF_TGTS = ['OFF', 'SLOT 1 LEVEL', 'SLOT 2 LEVEL', 'SLOT 3 LEVEL']
+MF_TGTS = ['OFF', 'SLOT 1 LEVEL', 'SLOT 2 LEVEL', 'SLOT 3 LEVEL'] + ['SLOT %d P%d' % (k + 1, j + 1)
+                                                                  for k in range(3) for j in range(3)]
+MF_PNAMES = [('-', '-', '-'), ('MODE', 'CUTOFF', 'RESONANCE'), ('GAIN', 'TONE', 'CRUSH'), ('TIME', 'FEEDBACK', 'MIX'),
+             ('MODE', 'RATE', 'DEPTH')]                              # per TYPE (mfxdsp.TYPES order)
+MF_PDISP = [(('n',), ('n',), ('n',)), (('s', 'mf_fm', 3), ('t', 'mf_hz', 'HZ'), ('n',)),
+            (('t', 'mf_db', 'DB'), ('n',), ('s', 'mf_cr', 7)), (('t', 'mf_ms', 'MS'), ('n',), ('n',)),
+            (('s', 'mf_mm', 3), ('n',), ('n',))]
+def mf_slot_tab(k):
+    return ('SLOT %d' % (k + 1), [('TYPE', MTYPE + k, 0, 4, 'mfx_type%d' % k, ('s', 'mf_ty', 5))] +
+            [(('dyn', MTYPE + k, [MF_PNAMES[t][j] for t in range(5)]), MP + 3 * k + j, 0, 127, 'mfx_par%d' % k,
+              ('dyn', MTYPE + k, [MF_PDISP[t][j] for t in range(5)])) for j in range(3)])
 MFX_TABS = [
     ('FX CHAIN', [('ENGINE', MON, 0, 1, 'mfx_onoff', ('s', 'mf_offon', 2))] +
                  [x for k in range(3) for x in (('SLOT %d AT' % (k + 1), MSLOT + k, 0, 14, 'mfx_route', ('s', 'mf_codes', 15)),
                                                 ('SLOT %d LEVEL' % (k + 1), MLVL + k, 0, 127, 'mfx_levels', ('n',)))]),
+    mf_slot_tab(0), mf_slot_tab(1), mf_slot_tab(2),
     ('CONTROLS', [(nm, MCTRL + i, 0, len(MF_TGTS) - 1, 'mfx_ctrl_reset', ('s', 'mf_tgts', len(MF_TGTS)))
                   for i, (nm, ch) in enumerate(MF_SRC)] + [('PADS 1-3', MPADS, 0, 1, None, ('s', 'mf_padm', 2))])]
 KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BASE + 0x324, RAM_BASE + 0x326, RAM_BASE + 0x39C
@@ -532,13 +552,18 @@ for P_ in MAC_PAGES:
     MAC_STRS += [('s_%st%d' % (P_['pid'], ti), P_['name'] + ': ' + d) for ti, (d, _) in enumerate(P_['tabs'])]
     MAC_STRS += [('s_%sd%d' % (P_['pid'], ti), d) for ti, (d, _) in enumerate(P_['tabs'])]
     MAC_STRS += [('s_%si%d_%d' % (P_['pid'], ti, i), it[0]) for ti, (_, items) in enumerate(P_['tabs'])
-                 if not isinstance(items, str) for i, it in enumerate(items)]
+                 if not isinstance(items, str) for i, it in enumerate(items) if not isinstance(it[0], tuple)]
+    MAC_STRS += [('s_%si%d_%d_%d' % (P_['pid'], ti, i, t), nm) for ti, (_, items) in enumerate(P_['tabs'])
+                 if not isinstance(items, str) for i, it in enumerate(items) if isinstance(it[0], tuple)
+                 for t, nm in enumerate(it[0][2])]
 MAC_STRS += [('s_lbc%d' % i, n) for i, n in enumerate(LAB_CH_NAMES)]
 MAC_STRS += [('s_lfw%d' % i, n) for i, n in enumerate(LFO_WAVES)] + [('s_arm%d' % i, n) for i, n in enumerate(ARP_MODES)]
 MAC_STRS += [('s_vmn%d' % i, n) for i, n in enumerate(VM_NAMES)]
 MAC_STRS += [('s_lfr%d' % i, ('%g' % hz) + 'HZ') for i, hz in enumerate(LFO_HZ)]
 MAC_STRS += [('s_mfo0', 'OFF'), ('s_mfo1', 'ON')] + [('s_mfc%d' % i, n) for i, n in enumerate(MF_CODE_NAMES)]
 MAC_STRS += [('s_mfg%d' % i, n) for i, n in enumerate(MF_TGTS)] + [('s_mfp0', 'PLAY'), ('s_mfp1', 'FX SWITCH')]
+MAC_STRS += [('s_mfy%d' % i, n) for i, n in enumerate(mfxdsp.TYPES)] + [('s_mff%d' % i, n) for i, n in enumerate(mfxdsp.FLT_MODES)]
+MAC_STRS += [('s_mfr%d' % i, n) for i, n in enumerate(mfxdsp.CRUSH_NAMES)] + [('s_mfm%d' % i, n) for i, n in enumerate(mfxdsp.MOD_MODES)]
 MAC_STRS += [('s_rtl%d' % i, n) for i, n in enumerate(RT_LOC_NAMES)] + [('s_rtp%d' % i, n) for i, (n, _) in enumerate(RT_PRESETS)]
 def sb_thumb(n): return max(3, round(22 * 3 / n))                       # scroll bar thumb height for n rows
 OSC_MIDI0, OSC_STEPS = 12, 16                                      # osc table: MIDI 12.. in 1/16 semitones (detune steps)
@@ -1134,6 +1159,14 @@ def build():
             a.mov_l_ind(2, 2); a.bsr16('row_str')
             a.label(end)
         elif disp[0] == 'n7': a.mov_b_from_abs(var, 'r0l'); a.and_b_imm(0x7F, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
+        elif disp[0] == 'dyn':                                  # the display depends on a TYPE variable
+            end = uniq('dye')
+            for t_, d_ in enumerate(disp[2]):
+                nx_ = uniq('dyn')
+                a.mov_b_from_abs(disp[1], 'r0l'); a.cmp_b_imm(t_, 'r0l'); a.bne16(nx_)
+                dshow(var, d_); a.bra16(end)
+                a.label(nx_)
+            a.label(end)
         elif disp[0] == 'cut':                                  # knob A: OFF at 127, else the cutoff in Hz
             o_, e_ = uniq('dco'), uniq('dce')
             a.mov_b_from_abs(var, 'r0l'); a.cmp_b_imm(127, 'r0l'); a.bcc(o_)
@@ -1206,7 +1239,17 @@ def build():
             for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
                 sk = uniq('dvs')
                 row_y(i, sk)
-                a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_%si%d_%d' % (pid, ti, i), 'font_tiny')
+                if isinstance(lbl, tuple):                # ('dyn', TYPE variable, [label per value])
+                    le_ = uniq('dle')
+                    for t_ in range(len(lbl[2])):
+                        nx_ = uniq('dln')
+                        a.mov_b_from_abs(lbl[1], 'r0l'); a.cmp_b_imm(t_, 'r0l'); a.bne16(nx_)
+                        a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h')
+                        D.text_at_r1('s_%si%d_%d_%d' % (pid, ti, i, t_), 'font_tiny'); a.bra16(le_)
+                        a.label(nx_)
+                    a.label(le_)
+                else:
+                    a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_%si%d_%d' % (pid, ti, i), 'font_tiny')
                 a.mov_l_imm(KROW, 1); dshow(var, disp); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
                 a.bsr16('dd_rval')
                 a.mov_b_from_abs(CURV, 'r0l'); a.cmp_b_imm(i, 'r0l'); a.bne16(sk)
@@ -1330,6 +1373,7 @@ def build():
     for v in range(NV): a.mov_b_to_abs('r0l', VMUTE + v)                             # fresh program: nothing muted
     for v in range(NV): a.mov_b_to_abs('r0l', VLAS + v)                              # (and no LA fades)
     a.bsr16('dds_apply')                                                             # and the DDS-DSP settings
+    a.bsr16('mfx_eram_clear')                                                       # (MFX's groups would collide)
     for v in range(NV): dsp_eram('v%d_rdA' % v, 0x18, 0); dsp_eram('v%d_rdB' % v, 0x18, 2)
     dsp_eram('rec_w0', 0); dsp_eram('rec_w1', 0)
     for v in range(NV): dsp_coef('v%d_t' % v, 0); dsp_coef('v%d_g' % v, 64)
@@ -3155,6 +3199,7 @@ def build():
     a.mov_b_from_abs(MSAVEIDX, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_IDX)      # the stock FX LOCATION back
     a.mov_b_from_abs(MSAVEFLG, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_FLAGS); a.jsr(FX_LOC_APPLY)
     a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mff_x')
+    a.bsr16('mfx_eram_clear')                                                    # our delay-RAM groups off first
     set_byte(MLOADED, 0)
     a.mov_w_from_abs(FX_PATCH_BUF, 0); a.cmp_w_imm(20, 0); a.bcc('mff_x')        # the stock FX patch back (if sane)
     a.mov_l_imm(FX_PATCH_BUF, 0); a.jsr(FX_LOAD_PATCH)
@@ -3166,6 +3211,9 @@ def build():
     a.mov_w_imm(0x300 - 0x3C, 1); a.mov_w_imm(0x3C, 8); a.mov_w_imm(1, 0); a.jsr('own_load'); a.adds4(7)
     a.mov_w_imm(0xFFFF, 0); a.mov_w_to_abs(0, FX_CUR)                            # (the stock reloads its algorithm later)
     set_byte(MLOADED, 1); set_byte(KLOADED, 0)                                   # KEYS' program is gone
+    a.bsr16('mfx_eram_init')                                                     # every old group off, ours on
+    a.mov_l_imm(MSHAD, 1); a.mov_w_imm(3 * MF_NENT, 2); a.mov_b_imm(0xFF, 'r0l')   # shadows invalid: write all
+    a.label('mfl_sh'); a.mov_b_st('r0l', 1); a.adds1(1); a.mov_b_st('r0l', 1); a.adds1(1); a.dec_w1(2); a.bne('mfl_sh')
     a.bsr16('mfx_levels')
     for w in FX_MUTE_WORDS: a.mov_w_imm(0x0100, 8); a.mov_w_imm(0x1000 | (w << 2), 0); a.jsr('own_coef')
     a.rts()
@@ -3177,16 +3225,198 @@ def build():
     for k in (1, 2):
         a.mov_b_from_abs(MSLOT + k, 'r1l'); a.mov_b_imm(0, 'r1h'); a.mov_w_imm(k, 8); a.mov_w_imm(7, 0); a.jsr(MIXER_PARAM)
     a.label('mfr_x'); a.rts()
-    a.label('mfx_levels')                                       # slot levels -> the program's level coefficients
-    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('mfl_x')
+    a.label('mfx_levels')                                       # every slot -> its program words
+    for k in range(3): set_byte(MAPS, k); a.bsr16('mfx_apply')
+    a.rts()
+    for k in range(3):                                          # row hooks: which slot
+        a.label('mfx_type%d' % k); set_byte(MAPS, k); a.bra16('mfx_type')
+        a.label('mfx_par%d' % k); set_byte(MAPS, k); a.bra16('mfx_par')
+
+    def mf_ptr(table, idx_var, stride):                         # er3 = table + byte[idx_var] * stride
+        a.mov_b_from_abs(idx_var, 'r0l'); a.extu_w(0)
+        if stride in (2, 4): a.shll_w(0)
+        if stride == 4: a.shll_w(0)
+        if stride == 3: a.mov_w_rr(0, 1); a.shll_w(1); a.add_w_rr(1, 0)
+        if stride == 5: a.mov_w_rr(0, 1); a.shll_w(1); a.shll_w(1); a.add_w_rr(1, 0)
+        a.extu_l(0); a.mov_l_imm(table, 3); a.add_l_rr(0, 3)
+    VI = mfxdsp.VI
+    def mf_put(reg, name): a.mov_b_st_disp(reg, VI[name], 6)    # MVAL[name] = reg (er6 = MVAL)
+    def mf_slotp(base, out):                                    # er1 = base + MAPS (byte table per slot)
+        a.mov_b_from_abs(MAPS, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(base, 1); a.add_l_rr(0, 1)
+    a.label('mfx_type')                                         # TYPE changed: its default params, delay RAM split
+    a.push_l(2); a.push_l(3)
+    mf_slotp(MTYPE, 1); a.mov_b_ld(1, 'r2l')                                       # r2l = type
+    a.mov_b_from_abs(MAPS, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm(MP, 1); a.add_l_rr(0, 1)                 # er1 = MP + 3 s
+    a.mov_b_rr('r2l', 'r0l'); a.mov_b_rr('r0l', 'r2h'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r2h', 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm('mf_pdef', 3); a.add_l_rr(0, 3)          # er3 = defaults of the type
+    for j in range(3): a.mov_b_ld_disp(j, 3, 'r0l'); a.mov_b_st_disp('r0l', j, 1)
+    a.pop_l(3); a.pop_l(2)
+    a.bsr16('mfx_mask')
+    a.mov_b_from_abs(MREGM, 'r1l'); a.cmp_b_rr('r0l', 'r1l'); a.beq16('mfx_apply')
+    a.mov_b_to_abs('r0l', MREGM)                                                    # the split changed:
+    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mft_x')
+    a.bsr16('mfx_eram_ew'); a.bra16('mfx_levels')                                  # new line bases, every slot again
+    a.label('mft_x'); a.rts()
+    a.label('mfx_mask')                                         # r0l = bit k set when slot k is DELAY
+    a.mov_b_imm(0, 'r0l')
     for k in range(3):
-        for side in 'lr':
-            w_ = MFX_PARAMS['m%d_%s' % (k, side)][1]
-            by_ = uniq('mfb')
-            a.mov_b_from_abs(MLVL + k, 'r0h'); a.btst_abs(k, MBYP); a.beq(by_); a.mov_b_imm(64, 'r0h')   # bypass: x1
-            a.label(by_); a.mov_b_imm((MFX_PROG[w_] >> 8) & 3, 'r0l'); a.mov_w_rr(0, 8)
-            a.mov_w_imm(0x1000 | (w_ << 2), 0); a.jsr('own_coef')
+        nx_ = uniq('mfm'); a.mov_b_from_abs(MTYPE + k, 'r1l'); a.cmp_b_imm(mfxdsp.T_DELAY, 'r1l'); a.bne(nx_)
+        a.or_b_imm(1 << k, 'r0l'); a.label(nx_)
+    a.rts()
+    a.label('mfx_par')                                          # a param changed: clamp to its TYPE's range, apply
+    a.push_l(2); a.push_l(3)
+    mf_slotp(MTYPE, 1); a.mov_b_ld(1, 'r2l')
+    a.mov_b_rr('r2l', 'r0l'); a.mov_b_rr('r0l', 'r2h'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r2h', 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm('mf_pmax', 3); a.add_l_rr(0, 3)          # er3 = maxima of the type
+    a.mov_b_from_abs(MAPS, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm(MP, 1); a.add_l_rr(0, 1)
+    for j in range(3):
+        ok_ = uniq('mpc')
+        a.mov_b_ld_disp(j, 3, 'r2l'); a.mov_b_ld_disp(j, 1, 'r0l'); a.cmp_b_rr('r2l', 'r0l'); a.bls(ok_)
+        a.mov_b_st_disp('r2l', j, 1)
+        a.label(ok_)
+    a.pop_l(3); a.pop_l(2)
+    a.label('mfx_apply')                                        # slot MAPS -> values -> the words that changed
+    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfa_go'); a.rts()
+    a.label('mfa_go')
+    a.push_l(3); a.push_l(4); a.push_l(5); a.push_l(6)
+    a.mov_l_imm(MVAL, 6)
+    a.mov_l_imm('mf_vdef', 3)                                   # defaults: every block transparent
+    for i in range(len(mfxdsp.VIDS)): a.mov_b_ld_disp(i, 3, 'r0l'); a.mov_b_st_disp('r0l', i, 6)
+    a.mov_w_imm(2, 0); a.mov_w_to_abs(0, MDLY); set_byte(MDRY, 64); set_byte(MWET, 0)
+    mf_slotp(MTYPE, 1); a.mov_b_ld(1, 'r0l'); a.mov_b_to_abs('r0l', MEFT)          # effective TYPE / level
+    mf_slotp(MLVL, 1); a.mov_b_ld(1, 'r0l'); a.mov_b_to_abs('r0l', MEFL)
+    a.mov_b_from_abs(MAPS, 'r1l'); a.mov_b_from_abs(MBYP, 'r0l')
+    a.label('mfa_by'); a.cmp_b_imm(0, 'r1l'); a.beq('mfa_bt'); a.shlr_b('r0l'); a.dec_b('r1l'); a.bra('mfa_by')
+    a.label('mfa_bt'); a.and_b_imm(1, 'r0l'); a.beq('mfa_nb')
+    set_byte(MEFT, 0); set_byte(MEFL, 64)                                          # bypassed: transparent, x1
+    a.label('mfa_nb')
+    a.mov_b_from_abs(MAPS, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm(MP, 1); a.add_l_rr(0, 1)
+    for j in range(3): a.mov_b_ld_disp(j, 1, 'r0l'); a.mov_b_to_abs('r0l', MPP + j)   # p1-p3
+    a.mov_b_from_abs(MREGM, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
+    a.mov_b_from_abs(MAPS, 'r1l'); a.add_b_rr('r1l', 'r0l'); a.extu_w(0); a.shll_w(0); a.shll_w(0)
+    a.extu_l(0); a.mov_l_imm('mf_regt', 3); a.add_l_rr(0, 3)                       # region (base, end) words
+    a.mov_w_ld(3, 0); a.mov_w_to_abs(0, MRB); a.mov_w_disp(2, 3, 0); a.mov_w_to_abs(0, MRE)
+    a.mov_b_from_abs(MEFT, 'r0l')
+    a.cmp_b_imm(mfxdsp.T_FILTER, 'r0l'); a.beq16('mfa_flt')
+    a.cmp_b_imm(mfxdsp.T_DRIVE, 'r0l'); a.beq16('mfa_drv')
+    a.cmp_b_imm(mfxdsp.T_DELAY, 'r0l'); a.beq16('mfa_dly')
+    a.cmp_b_imm(mfxdsp.T_MOD, 'r0l'); a.beq16('mfa_mod')
+    a.bra16('mfa_com')
+    a.label('mfa_flt')
+    mf_ptr('mf_cut', MPP + 1, 2); a.mov_b_ld(3, 'r0l'); mf_put('r0l', 'FH'); a.mov_b_ld_disp(1, 3, 'r0l'); mf_put('r0l', 'FL')
+    mf_ptr('mf_q', MPP + 2, 2); a.mov_b_ld(3, 'r0l'); mf_put('r0l', 'QH'); a.mov_b_ld_disp(1, 3, 'r0l'); mf_put('r0l', 'QL')
+    a.mov_b_imm(0, 'r0l'); mf_put('r0l', 'FDRY')
+    a.mov_b_imm(64, 'r0l'); a.mov_b_from_abs(MPP, 'r1l')
+    a.cmp_b_imm(0, 'r1l'); a.bne('mfa_f1'); mf_put('r0l', 'WL'); a.bra16('mfa_com')
+    a.label('mfa_f1'); a.cmp_b_imm(1, 'r1l'); a.bne('mfa_f2')
+    mf_ptr('mf_wb', MPP + 2, 1); a.mov_b_ld(3, 'r0l'); mf_put('r0l', 'WB'); a.bra16('mfa_com')
+    a.label('mfa_f2'); mf_put('r0l', 'WH'); a.bra16('mfa_com')
+    a.label('mfa_drv')
+    mf_ptr('mf_gain', MPP, 5)
+    for j, nm_ in enumerate(('G1C', 'G1S', 'G2C', 'G2S', 'DWET')): a.mov_b_ld_disp(j, 3, 'r0l'); mf_put('r0l', nm_)
+    mf_ptr('mf_tone', MPP + 1, 1); a.mov_b_ld(3, 'r0l'); mf_put('r0l', 'T'); a.not_b('r0l'); a.inc_b('r0l'); mf_put('r0l', 'TN')
+    a.mov_b_imm(0, 'r0l'); mf_put('r0l', 'DDRY')
+    mf_ptr('mf_crush', MPP + 2, 3)
+    for j, nm_ in enumerate(('KINC', 'KC', 'KS')): a.mov_b_ld_disp(j, 3, 'r0l'); mf_put('r0l', nm_)
+    a.bra16('mfa_com')
+    a.label('mfa_mod')
+    a.mov_b_from_abs(MPP, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq('mfa_mr')
+    mf_ptr('mf_lfo', MPP + 1, 3); a.bra('mfa_mo')
+    a.label('mfa_mr'); mf_ptr('mf_ring', MPP + 1, 3)
+    a.label('mfa_mo')
+    for j, nm_ in enumerate(('MRA', 'MRB', 'MRC')): a.mov_b_ld_disp(j, 3, 'r0l'); mf_put('r0l', nm_)
+    mf_ptr('mf_dq', MPP + 2, 1); a.mov_b_ld(3, 'r1l')                             # r1l = dq
+    a.mov_b_from_abs(MPP, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.bne('mfa_mt')
+    a.add_b_rr('r1l', 'r1l')                                                       # RING: 64 - 2dq, +2dq
+    a.mov_b_imm(64, 'r0l'); a.sub_b_rr('r1l', 'r0l'); mf_put('r0l', 'ML0'); mf_put('r0l', 'MR0')
+    mf_put('r1l', 'ML1'); mf_put('r1l', 'MR1'); a.bra16('mfa_com')
+    a.label('mfa_mt')                                                              # TREMOLO / AUTO-PAN: 64 - dq, -dq
+    a.mov_b_imm(64, 'r0l'); a.sub_b_rr('r1l', 'r0l'); mf_put('r0l', 'ML0'); mf_put('r0l', 'MR0')
+    a.mov_b_rr('r1l', 'r0l'); a.not_b('r0l'); a.inc_b('r0l'); mf_put('r0l', 'ML1'); mf_put('r0l', 'MR1')
+    a.mov_b_from_abs(MPP, 'r0h'); a.cmp_b_imm(1, 'r0h'); a.bne16('mfa_com'); mf_put('r1l', 'MR1')   # PAN: R +dq
+    a.bra16('mfa_com')
+    a.label('mfa_dly')
+    mf_ptr('mf_dtime', MPP, 2); a.mov_w_ld(3, 0)                                   # r0 = samples
+    a.mov_w_from_abs(MRE, 1); a.mov_w_from_abs(MRB, 2); a.sub_w_rr(2, 1); a.add_w_imm(-2 & 0xFFFF, 1)   # r1 = room
+    a.cmp_w_rr(1, 0); a.bls('mfa_d1'); a.mov_w_rr(1, 0)
+    a.label('mfa_d1'); a.cmp_w_imm(2, 0); a.bcc('mfa_d2'); a.mov_w_imm(2, 0)
+    a.label('mfa_d2'); a.mov_w_to_abs(0, MDLY)
+    mf_ptr('mf_fb', MPP + 1, 1); a.mov_b_ld(3, 'r0l'); mf_put('r0l', 'EFB')
+    mf_ptr('mf_mix', MPP + 2, 2); a.mov_b_ld(3, 'r0l'); a.mov_b_to_abs('r0l', MDRY)
+    a.mov_b_ld_disp(1, 3, 'r0l'); a.mov_b_to_abs('r0l', MWET)
+    a.label('mfa_com')                                                             # delay target, level -> dry / wet
+    a.mov_w_from_abs(MRB, 0); a.mov_w_from_abs(MDLY, 1); a.add_w_rr(1, 0); a.shlr_w(0)   # r0 = half
+    a.mov_w_rr(0, 1); a.mov_b_rr('r1h', 'r1l'); a.shlr_b('r1l')                    # half >> 9
+    a.not_b('r1l'); a.inc_b('r1l'); mf_put('r1l', 'ETB')
+    a.and_w_imm(0x1FF, 0); a.shlr_w(0); a.shlr_w(0); a.shlr_w(0)                    # (half & 0x1FF) >> 3
+    a.not_b('r0l'); a.inc_b('r0l'); mf_put('r0l', 'ETC')
+    for src, nm_ in ((MDRY, 'OD'), (MWET, 'OW')):
+        ok_ = uniq('mfo')
+        a.mov_b_from_abs(src, 'r0l'); a.mov_b_from_abs(MEFL, 'r1l'); a.mulxu_b('r1l', 0)
+        for _ in range(6): a.shlr_w(0)
+        a.cmp_w_imm(127, 0); a.bls(ok_); a.mov_w_imm(127, 0)
+        a.label(ok_); mf_put('r0l', nm_)
+    # ---- write the words that changed: er4 = addresses, er5 = shadow, er3 = entries ----
+    a.mov_b_from_abs(MAPS, 'r0l'); a.mov_b_imm(2 * MF_NENT, 'r1l'); a.mulxu_b('r1l', 0); a.extu_l(0)
+    a.mov_l_imm('mf_atab', 4); a.add_l_rr(0, 4)
+    a.mov_l_imm(MSHAD, 5); a.add_l_rr(0, 5)
+    a.mov_l_imm('mf_ent', 3); a.mov_b_imm(MF_NENT, 'r2l')
+    a.label('mfw_lp')
+    a.mov_b_ld(3, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(MVAL, 1); a.add_l_rr(0, 1)
+    a.mov_b_ld(1, 'r0h')                                                           # r0h = coef
+    a.mov_b_ld_disp(1, 3, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.bne('mfw_vs')
+    a.mov_b_ld_disp(2, 3, 'r0l'); a.bra('mfw_sh')                                  # the word's own shift
+    a.label('mfw_vs'); a.mov_b_rr('r0h', 'r2h'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(MVAL, 1); a.add_l_rr(0, 1)
+    a.mov_b_ld(1, 'r0l'); a.mov_b_rr('r2h', 'r0h')                                 # r0l = shift from a value
+    a.label('mfw_sh')
+    a.mov_w_ld(5, 1); a.cmp_w_rr(0, 1); a.beq('mfw_nx')                            # unchanged: skip
+    a.mov_w_st(0, 5)
+    a.push_l(2); a.push_l(3); a.push_l(4); a.push_l(5)
+    a.mov_w_rr(0, 8); a.mov_w_ld(4, 0); a.jsr('own_coef')                          # e0 = coef << 8 | shift
+    a.pop_l(5); a.pop_l(4); a.pop_l(3); a.pop_l(2)
+    a.label('mfw_nx')
+    a.adds1(3); a.adds1(3); a.adds1(3); a.adds1(4); a.adds1(4); a.adds1(5); a.adds1(5)
+    a.dec_b('r2l'); a.bne16('mfw_lp')
+    a.pop_l(6); a.pop_l(5); a.pop_l(4); a.pop_l(3)
     a.label('mfl_x'); a.rts()
+    a.label('mfx_pscale')                                       # r0l = 0..127, r1l = target 4..12 -> MP[target - 4]
+    a.push_l(1); a.push_l(2); a.push_l(3)                       # scaled to that param's range (by the slot's TYPE)
+    a.mov_b_rr('r0l', 'r1h'); a.add_b_imm(-4 & 0xFF, 'r1l')     # r1h = value, r1l = idx = 3 k + j
+    a.mov_b_imm(3, 'r0h'); a.mov_b_rr('r1l', 'r2l'); a.mov_b_imm(0, 'r2h'); a.divxu_b('r0h', 2)   # r2l = k, r2h = j
+    a.mov_b_rr('r2l', 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(MTYPE, 3); a.add_l_rr(0, 3); a.mov_b_ld(3, 'r0l')
+    a.mov_b_rr('r0l', 'r0h'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r0h', 'r0l'); a.add_b_rr('r2h', 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm('mf_pmax', 3); a.add_l_rr(0, 3); a.mov_b_ld(3, 'r0l'); a.inc_b('r0l')
+    a.mov_b_rr('r1h', 'r2l'); a.mulxu_b('r0l', 2); a.shll_w(2)                     # r2h = value * (max + 1) / 128
+    a.mov_b_rr('r1l', 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(MP, 3); a.add_l_rr(0, 3); a.mov_b_st('r2h', 3)
+    a.pop_l(3); a.pop_l(2); a.pop_l(1); a.rts()
+    # ---- delay-RAM groups (the loader can't write them) ----
+    def mf_eram(w_, mode_, imm_):
+        a.mov_l_imm(keysdsp.host_image_eram(mode_, imm_), 1); a.mov_w_imm(0x1000 | (w_ << 2), 0); a.jsr('own_eram')
+    a.label('mfx_eram_clear')                                   # our groups off (KEYS load, MFX off)
+    for s_ in range(3):
+        for n_, _, _ in mfxdsp.eram_groups(s_): mf_eram(MFX_PARAMS[n_][1], 0, 0)
+    a.rts()
+    a.label('mfx_eram_init')                                    # after our load: every group off, then ours
+    a.push_l(2)
+    a.mov_w_imm(0x1000 | (0x3C << 2), 2)
+    a.label('mfe_lp'); a.mov_l_imm(0, 1); a.mov_w_rr(2, 0); a.push_l(2); a.jsr('own_eram'); a.pop_l(2)
+    a.add_w_imm(5 << 2, 2); a.cmp_w_imm(0x1000 | (0x2F0 << 2), 2); a.bcs('mfe_lp')
+    a.pop_l(2)
+    for s_ in range(3):
+        for n_, mode_, imm_ in mfxdsp.eram_groups(s_):
+            if not n_.endswith('_ew'): mf_eram(MFX_PARAMS[n_][1], mode_, imm_)
+    a.bsr16('mfx_mask'); a.mov_b_to_abs('r0l', MREGM)
+    a.label('mfx_eram_ew')                                      # the delay lines' WRITE bases for the split MREGM
+    a.push_l(3)
+    a.mov_b_from_abs(MREGM, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
+    a.extu_w(0); a.shll_w(0); a.shll_w(0); a.extu_l(0); a.mov_l_imm('mf_regp', 3); a.add_l_rr(0, 3)
+    for s_ in range(3):
+        a.mov_l_ld_disp(4 * s_, 3, 1); a.mov_w_imm(0x1000 | (MFX_PARAMS['m%d_ew' % s_][1] << 2), 0)
+        a.push_l(3); a.jsr('own_eram'); a.pop_l(3)
+    a.pop_l(3); a.rts()
     a.label('mfx_guard')                                        # idle: MFX on -> our program in DSP1 (after KEYS too)
     a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfg_x')
     a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfg_x')
@@ -3221,8 +3451,9 @@ def build():
         a.mov_b_from_abs(ADC_TAB + ch, 'r0l'); a.shlr_b('r0l')                   # 0..127
         a.mov_b_from_abs(MCLAST + i, 'r0h'); a.cmp_b_rr('r0l', 'r0h'); a.beq16(nx)
         a.mov_b_to_abs('r0l', MCLAST + i)
-        for t in range(1, len(MF_TGTS)):                                         # SLOT t LEVEL
+        for t in range(1, 4):                                                    # SLOT t LEVEL
             nt = uniq('mft'); a.cmp_b_imm(t, 'r1l'); a.bne(nt); a.mov_b_to_abs('r0l', MLVL + t - 1); a.label(nt)
+        np_ = uniq('mfp'); a.cmp_b_imm(4, 'r1l'); a.bcs(np_); a.bsr16('mfx_pscale'); a.label(np_)   # SLOT k P j
         a.mov_b_imm(1, 'r2h')
         a.label(nx)
     a.cmp_b_imm(0, 'r2h'); a.beq('mfc_x')
@@ -3803,6 +4034,47 @@ def build():
     a.label('mf_tgts')
     for i in range(len(MF_TGTS)): a.dc_l('s_mfg%d' % i)
     a.label('mf_c2i'); a.raw(bytes(MF_C2I)); a.align2()
+    M_ = mfxdsp
+    a.label('mf_ty')
+    for i in range(len(M_.TYPES)): a.dc_l('s_mfy%d' % i)
+    a.label('mf_fm')
+    for i in range(len(M_.FLT_MODES)): a.dc_l('s_mff%d' % i)
+    a.label('mf_cr')
+    for i in range(len(M_.CRUSH_NAMES)): a.dc_l('s_mfr%d' % i)
+    a.label('mf_mm')
+    for i in range(len(M_.MOD_MODES)): a.dc_l('s_mfm%d' % i)
+    a.label('mf_hz'); a.raw(struct.pack('>128H', *[int(round(M_.cutoff_hz(v))) for v in range(128)]))
+    a.label('mf_db'); a.raw(struct.pack('>128H', *[int(round(M_.gain_db(v))) for v in range(128)]))
+    a.label('mf_ms'); a.raw(struct.pack('>128H', *[int(round(M_.delay_ms(v))) for v in range(128)]))
+    a.label('mf_dtime'); a.raw(struct.pack('>128H', *M_.TAB_DTIME))
+    a.label('mf_regt')                                          # [mask][slot] -> (base, end) words
+    for m_ in range(8):
+        for b_, e_ in M_.regions([M_.T_DELAY if m_ >> k & 1 else M_.T_OFF for k in range(3)]): a.raw(struct.pack('>HH', b_, e_))
+    a.label('mf_regp')                                          # [mask][slot] -> the WRITE group (0x108B64 long)
+    for m_ in range(8):
+        for b_, e_ in M_.regions([M_.T_DELAY if m_ >> k & 1 else M_.T_OFF for k in range(3)]):
+            a.raw(struct.pack('>I', keysdsp.host_image_eram(0x10, b_)))
+    a.label('mf_atab')                                          # [slot][entry] -> word address for own_coef
+    for s_ in range(3):
+        for n_, _, _ in M_.ENTRIES: a.raw(struct.pack('>H', 0x1000 | (MFX_PARAMS['m%d_%s' % (s_, n_)][1] << 2)))
+    a.label('mf_cut'); a.raw(bytes(x & 0xFF for hl in M_.TAB_CUT for x in hl))
+    a.label('mf_q'); a.raw(bytes(x & 0xFF for hl in M_.TAB_Q for x in hl))
+    a.label('mf_wb'); a.raw(bytes(M_.TAB_WB))
+    a.label('mf_gain'); a.raw(bytes(x & 0xFF for g in M_.TAB_GAIN for x in g))
+    a.label('mf_tone'); a.raw(bytes(M_.TAB_TONE))
+    a.label('mf_crush'); a.raw(bytes(x & 0xFF for c in M_.TAB_CRUSH for x in c))
+    a.label('mf_lfo'); a.raw(bytes(x for f in M_.TAB_LFO for x in f))
+    a.label('mf_ring'); a.raw(bytes(x for f in M_.TAB_RING for x in f))
+    a.label('mf_dq'); a.raw(bytes(M_.TAB_DQ))
+    a.label('mf_fb'); a.raw(bytes(M_.TAB_FB))
+    a.label('mf_mix'); a.raw(bytes(x for m in M_.TAB_MIX for x in m))
+    a.label('mf_vdef'); a.raw(bytes(M_.VDEF[n] & 0xFF for n in M_.VIDS))
+    a.label('mf_ent')                                           # (value id, shift value id or FF, the word's shift)
+    for n_, v_, sh_ in M_.ENTRIES:
+        w_ = MFX_PARAMS['m0_%s' % n_][1]
+        a.raw(bytes((M_.VI[v_], 0xFF if sh_ is None else M_.VI[sh_], (MFX_PROG[w_] >> 8) & 3)))
+    a.label('mf_pdef'); a.raw(bytes(x for t in range(5) for x in M_.P_DEFAULT[t]))
+    a.label('mf_pmax'); a.raw(bytes(x for t in range(5) for x in M_.P_MAX[t])); a.align2()
     a.label('mf_padm'); a.dc_l('s_mfp0'); a.dc_l('s_mfp1')
     a.label('led_codes'); a.raw(bytes(LED_CODES)); a.align2()
     a.label('lfo_inc'); a.raw(struct.pack('>16H', *LFO_INC))
@@ -3926,7 +4198,8 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0), (MPADS, 0), (MBYP, 0), (MPLIT, 0), (BTON, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0), (MPADS, 0), (MBYP, 0), (MPLIT, 0), (BTON, 0), (MTYPE, 0), (MTYPE + 1, 0), (MTYPE + 2, 0), (MREGM, 0),
+                         *((MP + i_, 0) for i_ in range(9)),
                          (GOFF, 0), (GOFF + 1, 0), (KLFW, 0), (KLFR, 6), (KLFP, 0), (KLFF, 0), (KLFL, 0), (KLFD, 0), (TREMF, 64), (FLFO, 0),
                          (LFO_OFF, 0), (LFO_V, 0), (LFO_SH, 0), (LFO_PP, 0),
                          (KARP, 0), (KARR, 6), (KARG, 1), (KARO, 1), (AN, 0), (ACUR, 0xFF), (AOFF, 0),
