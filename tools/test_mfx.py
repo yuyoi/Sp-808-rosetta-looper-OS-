@@ -79,6 +79,21 @@ def main(image_path, out):
           '(expect 100) gains', slot_gains(sim), '(expect 1.0 0.5 1.56)')
     e.wb(bm.ADC_TAB + 6, 0); sim.run(30); print('KNOB A 0   SLOT 3 LEVEL', e.rb(bm.MLVL + 2), 'gains', slot_gains(sim))
     shots.append(('CONTROLS', sim.shot()))
+    # ---- PADS 1-3 = FX SWITCH: pad 2 bypasses slot 2 (level 32 -> x1), the pad LEDs show the slots that are on ----
+    prow = bm.LED_ROWS + 2
+    def lit(): return [p + 1 for p in range(16) if e.rw(prow) & e.rw(bm.LED_MASKS + 2 * p)]
+    for _ in range(6): sim.key(bm.K_DOWN)
+    sim.key(bm.K_RIGHT); sim.run(30)
+    print('PADS       mode', e.rb(bm.MPADS), bm.MF_CODE_NAMES and '', 'pads lit', lit(), '(expect 1 2 3)')
+    shots.append(('CONTROLS: PADS FX SWITCH', sim.shot()))
+    sim.pad(1); sim.pad(1, False); sim.run(20)
+    print('pad 2      MBYP %d lit %s gains %s (expect 2, [1, 3], slot 2 back to 1.0)' % (e.rb(bm.MBYP), lit(), slot_gains(sim)))
+    sim.pad(1); sim.pad(1, False); sim.run(20)
+    print('pad 2 again MBYP %d lit %s gains %s' % (e.rb(bm.MBYP), lit(), slot_gains(sim)))
+    n_on = len([x for x in sim.log if x[1] == 'on'])
+    sim.pad(5); sim.pad(5, False); sim.run(20)
+    print('pad 6      plays as usual:', len([x for x in sim.log if x[1] == 'on']) - n_on, 'note-on (expect 1)')
+    sim.key(bm.K_LEFT); sim.run(20); print('PADS PLAY  lit', lit(), '(pads given back)')
     n0 = len(sim.dsp_log); e.s16(0, 0x1000 | (w0 << 2)); e.s16(8, 0x7F00)
     sim.call('gate_coef'); print('gate       Roland write while MFX on -> %d writes (expect 0)' % (len(sim.dsp_log) - n0))
     sim.key(bm.K_ENTER); sim.key(bm.K_UP); sim.key(bm.K_ENTER); sim.run(5)     # FX CHAIN

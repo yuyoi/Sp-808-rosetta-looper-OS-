@@ -490,6 +490,7 @@ VULIT, VUT = RAM_BASE + 0x45B, RAM_BASE + 0x490                                #
 MON, MLOADED, MTAB, MCUR = (RAM_BASE + 0x430 + i for i in range(4))
 MSLOT, MLVL, MCTRL, MCLAST = RAM_BASE + 0x434, RAM_BASE + 0x437, RAM_BASE + 0x43A, RAM_BASE + 0x440   # 3, 3, 6, 6 bytes
 MSAVEIDX, MSAVEFLG = RAM_BASE + 0x446, RAM_BASE + 0x447   # the stock FX LOCATION before MFX went on
+MPADS, MBYP, MPLIT = RAM_BASE + 0x500, RAM_BASE + 0x501, RAM_BASE + 0x502   # pads 1-3 = slot switches; bypassed bits
 FX_LOAD_PATCH, FX_PATCH_BUF = 0x1081D6, 0x42235E   # stock: load the FX patch at er0 (algorithm word first); current patch
 MF_CODE_NAMES = ['OFF', 'SEND/RETURN', 'TR.A PRE-EQ', 'TR.A POST-EQ', 'TR.B PRE-EQ', 'TR.B POST-EQ', 'TR.C PRE-EQ',
                  'TR.C POST-EQ', 'TR.D PRE-EQ', 'TR.D POST-EQ', 'MIC/LINE PRE-EQ', 'MIC/LINE POST', 'MASTER', 'RECORD',
@@ -502,7 +503,7 @@ MFX_TABS = [
                  [x for k in range(3) for x in (('SLOT %d AT' % (k + 1), MSLOT + k, 0, 14, 'mfx_route', ('s', 'mf_codes', 15)),
                                                 ('SLOT %d LEVEL' % (k + 1), MLVL + k, 0, 127, 'mfx_levels', ('n',)))]),
     ('CONTROLS', [(nm, MCTRL + i, 0, len(MF_TGTS) - 1, 'mfx_ctrl_reset', ('s', 'mf_tgts', len(MF_TGTS)))
-                  for i, (nm, ch) in enumerate(MF_SRC)])]
+                  for i, (nm, ch) in enumerate(MF_SRC)] + [('PADS 1-3', MPADS, 0, 1, None, ('s', 'mf_padm', 2))])]
 KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BASE + 0x324, RAM_BASE + 0x326, RAM_BASE + 0x39C
 # S-EDIT (v1.91 on the Mac engine): rows in the old order (RELEASE, THRU, REVERSE, LOOP: ENTER still toggles), then
 # the knob-driven values read-only. One tab, so no submode menu.
@@ -533,7 +534,7 @@ MAC_STRS += [('s_lfw%d' % i, n) for i, n in enumerate(LFO_WAVES)] + [('s_arm%d' 
 MAC_STRS += [('s_vmn%d' % i, n) for i, n in enumerate(VM_NAMES)]
 MAC_STRS += [('s_lfr%d' % i, ('%g' % hz) + 'HZ') for i, hz in enumerate(LFO_HZ)]
 MAC_STRS += [('s_mfo0', 'OFF'), ('s_mfo1', 'ON')] + [('s_mfc%d' % i, n) for i, n in enumerate(MF_CODE_NAMES)]
-MAC_STRS += [('s_mfg%d' % i, n) for i, n in enumerate(MF_TGTS)]
+MAC_STRS += [('s_mfg%d' % i, n) for i, n in enumerate(MF_TGTS)] + [('s_mfp0', 'PLAY'), ('s_mfp1', 'FX SWITCH')]
 MAC_STRS += [('s_rtl%d' % i, n) for i, n in enumerate(RT_LOC_NAMES)] + [('s_rtp%d' % i, n) for i, (n, _) in enumerate(RT_PRESETS)]
 def sb_thumb(n): return max(3, round(22 * 3 / n))                       # scroll bar thumb height for n rows
 OSC_MIDI0, OSC_STEPS = 12, 16                                      # osc table: MIDI 12.. in 1/16 semitones (detune steps)
@@ -680,6 +681,7 @@ def build():
     a.bsr16('lab_idle')                           # LAB: live analog bars
     a.bsr16('mfx_guard')                          # MFX: (re)load our DSP1 program while it is on
     a.bsr16('mfx_ctrl')                           # MFX: knobs / D-Beam / footswitch -> slot levels
+    a.bsr16('mfx_padleds')                        # MFX: pads 1-3 lit = slots on
     a.mov_b_from_abs(BOOTSND, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('id_dial')   # boot sound: pad 16, once
     set_byte(BOOTSND, 1)
     a.mov_w_imm(BOOT_PAD, 0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
@@ -2441,6 +2443,7 @@ def build():
     a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('g1_nk')
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_KEYS, 'r0l'); a.beq16('g1_keys'); a.cmp_b_imm(P_KSET, 'r0l'); a.beq16('g1_keys')
     a.cmp_b_imm(P_DDS, 'r0l'); a.beq16('g1_keys')
+    a.cmp_b_imm(P_MFX, 'r0l'); a.beq16('g1_mfx')
     a.label('g1_nk')
     a.btst_imm(6, 'r5h'); a.bne16('g1_stock')                # releases: stock
     a.mov_w_rr(5, 0); a.and_w_imm(0x00F0, 0); a.cmp_w_imm(0x0010, 0); a.bne16('g1_stock')
@@ -2463,12 +2466,21 @@ def build():
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.bne('g1k_src')
     a.mov_w_rr(5, 0); a.and_w_imm(0x000F, 0); a.add_b_imm(PAD2KEY, 'r0l')          # pad -> key id
     a.btst_imm(6, 'r5h'); a.bne('g1k_off')
-    a.mov_b_imm(KEYS_LEVEL, 'r1l'); a.bsr16('arp_on'); a.bra('g1k_eat')
+    a.mov_b_imm(KEYS_LEVEL, 'r1l'); a.bsr16('arp_on'); a.bra16('g1k_eat')
     a.label('g1k_off'); a.bsr16('arp_off')
     a.label('g1k_eat'); a.mov_w_imm(1, 0); a.pop_l(5); a.rts()
+    a.label('g1_mfx')                                        # MFX page, PADS 1-3 = FX SWITCH: pads 1-3 bypass slots 1-3
+    a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('g1_nk')
+    a.mov_b_from_abs(MPADS, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('g1_nk')
+    a.mov_w_rr(5, 0); a.and_w_imm(0x000F, 0); a.cmp_b_imm(3, 'r0l'); a.bcc16('g1_nk')    # pads 4-16 play as usual
+    a.btst_imm(6, 'r5h'); a.bne16('g1k_eat')                                             # releases: eaten
+    a.mov_b_imm(1, 'r1l'); a.cmp_b_imm(0, 'r0l'); a.beq('g1m_t'); a.shll_b('r1l'); a.cmp_b_imm(1, 'r0l'); a.beq('g1m_t')
+    a.shll_b('r1l')
+    a.label('g1m_t'); a.mov_b_from_abs(MBYP, 'r0l'); a.xor_b_rr('r1l', 'r0l'); a.mov_b_to_abs('r0l', MBYP)
+    a.bsr16('mfx_levels'); a.bsr16('mfx_padleds'); a.bsr16('draw'); a.bra16('g1k_eat')
     a.label('g1k_src')                                       # picking: a pad hit = that pad onto the keys
-    a.btst_imm(6, 'r5h'); a.bne('g1k_eat')                   # releases eaten (stock would stop a GATE pad mid-capture)
-    a.cmp_b_imm(KS_IDLE, 'r0l'); a.bne('g1k_eat')            # sampling: pads do nothing
+    a.btst_imm(6, 'r5h'); a.bne16('g1k_eat')                   # releases eaten (stock would stop a GATE pad mid-capture)
+    a.cmp_b_imm(KS_IDLE, 'r0l'); a.bne16('g1k_eat')            # sampling: pads do nothing
     a.mov_b_from_abs(KBSEL, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('g1k_pick')
     a.mov_b_rr('r5l', 'r1l'); a.and_b_imm(0x0F, 'r1l')                              # bank mode: pad = bank
     a.mov_b_from_abs(KBANK, 'r0l'); a.and_b_imm(0x30, 'r0l'); a.add_b_rr('r1l', 'r0l')
@@ -2476,7 +2488,7 @@ def build():
     a.bsr16('draw'); a.bra16('g1k_eat')
     a.label('g1k_pick')
     a.mov_b_rr('r5l', 'r0l'); a.and_w_imm(0x000F, 0); a.mov_b_to_abs('r0l', KSRC)
-    a.bsr16('keys_sample'); a.bsr16('draw'); a.bra('g1k_eat')
+    a.bsr16('keys_sample'); a.bsr16('draw'); a.bra16('g1k_eat')
     a.label('g1_stock')
     a.pop_l(5); a.jmp(STOCK_G1)
 
@@ -3149,11 +3161,13 @@ def build():
         a.mov_b_from_abs(MSLOT + k, 'r1l'); a.mov_b_imm(0, 'r1h'); a.mov_w_imm(k, 8); a.mov_w_imm(7, 0); a.jsr(MIXER_PARAM)
     a.label('mfr_x'); a.rts()
     a.label('mfx_levels')                                       # slot levels -> the program's level coefficients
-    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfl_x')
+    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('mfl_x')
     for k in range(3):
         for side in 'lr':
             w_ = MFX_PARAMS['m%d_%s' % (k, side)][1]
-            a.mov_b_from_abs(MLVL + k, 'r0h'); a.mov_b_imm((MFX_PROG[w_] >> 8) & 3, 'r0l'); a.mov_w_rr(0, 8)
+            by_ = uniq('mfb')
+            a.mov_b_from_abs(MLVL + k, 'r0h'); a.btst_abs(k, MBYP); a.beq(by_); a.mov_b_imm(64, 'r0h')   # bypass: x1
+            a.label(by_); a.mov_b_imm((MFX_PROG[w_] >> 8) & 3, 'r0l'); a.mov_w_rr(0, 8)
             a.mov_w_imm(0x1000 | (w_ << 2), 0); a.jsr('own_coef')
     a.label('mfl_x'); a.rts()
     a.label('mfx_guard')                                        # idle: MFX on -> our program in DSP1 (after KEYS too)
@@ -3163,6 +3177,19 @@ def build():
     a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfg_x')
     a.bsr16('mfx_load'); a.bsr16('mfx_route')
     a.label('mfg_x'); a.rts()
+    a.label('mfx_padleds')                                      # FX SWITCH shown: pads 1-3 lit = slot on
+    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_MFX, 'r0l'); a.bne('mfp_off')
+    a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('mfp_off')
+    a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfp_off')
+    a.mov_b_from_abs(MPADS, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfp_off')
+    a.mov_b_from_abs(MPLIT, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfp_on')
+    a.bsr16('bl_stop'); a.bsr16('pads_take'); set_byte(MPLIT, 1)
+    a.label('mfp_on')
+    a.mov_b_from_abs(MBYP, 'r0l'); a.not_b('r0l'); a.and_b_imm(7, 'r0l'); a.mov_b_imm(0, 'r0h')
+    a.mov_w_to_abs(0, KPNEW); a.bra16('pads_apply')
+    a.label('mfp_off'); a.mov_b_from_abs(MPLIT, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfp_x')
+    set_byte(MPLIT, 0); a.bra16('pads_give')
+    a.label('mfp_x'); a.rts()
     a.label('mfx_ctrl_reset')                                   # a mapping changed: apply every source again
     a.mov_b_imm(0xFF, 'r0l')
     for i in range(len(MF_SRC)): a.mov_b_to_abs('r0l', MCLAST + i)
@@ -3759,6 +3786,7 @@ def build():
     a.label('mf_tgts')
     for i in range(len(MF_TGTS)): a.dc_l('s_mfg%d' % i)
     a.label('mf_c2i'); a.raw(bytes(MF_C2I)); a.align2()
+    a.label('mf_padm'); a.dc_l('s_mfp0'); a.dc_l('s_mfp1')
     a.label('led_codes'); a.raw(bytes(LED_CODES)); a.align2()
     a.label('lfo_inc'); a.raw(struct.pack('>16H', *LFO_INC))
     a.label('vib_ct'); a.raw(struct.pack('>17H', *VIB_CT))
@@ -3881,7 +3909,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0), (MPADS, 0), (MBYP, 0), (MPLIT, 0),
                          (GOFF, 0), (GOFF + 1, 0), (KLFW, 0), (KLFR, 6), (KLFP, 0), (KLFF, 0), (KLFL, 0), (KLFD, 0), (TREMF, 64), (FLFO, 0),
                          (LFO_OFF, 0), (LFO_V, 0), (LFO_SH, 0), (LFO_PP, 0),
                          (KARP, 0), (KARR, 6), (KARG, 1), (KARO, 1), (AN, 0), (ACUR, 0xFF), (AOFF, 0),

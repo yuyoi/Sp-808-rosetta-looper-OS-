@@ -341,6 +341,8 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   - Emulator (`tools/test_mfx.py`, DSP1 model): load through the flash table, all slots x1.0, slot 2 at 32 -> x0.5,
     knob A -> slot 3 level 100 -> x1.56, Roland's writes dropped while on, passed after OFF, KEYS round trip reloads.
   - Hw test idea: ENGINE ON, SLOT 2 AT TR.A POST-EQ, SLOT 2 LEVEL 0 -> track A (the pad voice on channel A) silent.
+  - v1.94: CONTROLS row PADS 1-3 = PLAY / FX SWITCH: on the MFX page pads 1-3 bypass / enable slots 1-3 (a bypassed
+    slot = x1), their LEDs show the slots that are on (pads_take / pads_give), pads 4-16 still play.
 
 ### Hidden stuff (log of finds, 2026-10-15)
 - **3 FX insert slots in DSP0, Roland uses 1** (mixer group 7 index 0/1/2): slots 1/2 send on GRAM D0-D6 and return on
