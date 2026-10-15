@@ -17,6 +17,7 @@ class KeysSim(test_v09.Sim):
     def __init__(self, image, labels):
         super().__init__(image, labels)
         e, s = self.e, self.e.stubs
+        self.stock_eats = False                              # True: unhooked key groups eat their keys (like hw)
         self.prog = [0] * 0x300                              # what the hardware DSP1 holds (DSP view)
         import json
         P = json.load(open(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'work', 'dsp', 'programs.json')))
@@ -110,10 +111,11 @@ class KeysSim(test_v09.Sim):
         self.commit()
     def key(self, code):                                     # dispatch like the OS: key groups, then the screen
         e = self.e; e.ww(bm.KEY_EVENT, code); base = code & 0xFF
-        if base in (bm.K_SONG, bm.K_SYSTEM, bm.K_SAMPLE) or code == bm.K_SH_SYSTEM: r = self.call('g8')
+        if e.rw(bm.KEYMASK) & (1 << (base >> 4)): r = 0           # the screen masked this group: straight to it
+        elif base in (bm.K_SONG, bm.K_SYSTEM, bm.K_SAMPLE) or code == bm.K_SH_SYSTEM: r = self.call('g8')
         elif (base & 0xF0) == 0x10: r = self.call('g1')
         elif (base & 0xF0) == 0x20: r = self.call('g2')          # PAD BANK, PAD SAMPLING, ...
-        else: r = 0
+        else: r = 1 if self.stock_eats and (base >> 4) not in (7, 11) else 0   # hw: stock groups eat most keys
         if r == 0: self.call(self.handlers[self.screen], 9)
         self.commit()
     def pad(self, p, down=True): self.key((0x10 | p) | (0 if down else 0x4000))

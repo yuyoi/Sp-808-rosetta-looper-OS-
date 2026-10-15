@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1195, '1.95'              # 1.95 = data tables word-aligned (h8asm align2 skipped jsr/jmp abs24); 1.94 voice modes
+VERSION, VER_TXT = 1196, '1.96'              # 1.96 = LAB BUTTONS sees every key (key groups masked); 1.95 word-aligned tables
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
@@ -491,6 +491,10 @@ MON, MLOADED, MTAB, MCUR = (RAM_BASE + 0x430 + i for i in range(4))
 MSLOT, MLVL, MCTRL, MCLAST = RAM_BASE + 0x434, RAM_BASE + 0x437, RAM_BASE + 0x43A, RAM_BASE + 0x440   # 3, 3, 6, 6 bytes
 MSAVEIDX, MSAVEFLG = RAM_BASE + 0x446, RAM_BASE + 0x447   # the stock FX LOCATION before MFX went on
 MPADS, MBYP, MPLIT = RAM_BASE + 0x500, RAM_BASE + 0x501, RAM_BASE + 0x502   # pads 1-3 = slot switches; bypassed bits
+# LAB BUTTONS (v1.95): the OS key groups eat most keys before the screen sees them; while BUTTONS is shown every
+# group is masked (0x427906 = FFFF), so each key comes to our screen as event 9. BTMASK = the mask before, BTON = set.
+KEYMASK = 0x427906
+BTMASK, BTON = RAM_BASE + 0x504, RAM_BASE + 0x506
 FX_LOAD_PATCH, FX_PATCH_BUF = 0x1081D6, 0x42235E   # stock: load the FX patch at er0 (algorithm word first); current patch
 MF_CODE_NAMES = ['OFF', 'SEND/RETURN', 'TR.A PRE-EQ', 'TR.A POST-EQ', 'TR.B PRE-EQ', 'TR.B POST-EQ', 'TR.C PRE-EQ',
                  'TR.C POST-EQ', 'TR.D PRE-EQ', 'TR.D POST-EQ', 'MIC/LINE PRE-EQ', 'MIC/LINE POST', 'MASTER', 'RECORD',
@@ -671,13 +675,14 @@ def build():
     a.bra16('done')
 
     a.label('leave')                              # to a stock screen: KEYS must not keep the master routed
-    a.bsr16('keys_guard_off'); a.bra16('done')
+    a.bsr16('bt_off'); a.bsr16('keys_guard_off'); a.bra16('done')
     a.label('idle')
     a.bsr16('keys_guard')                         # KEYS on/off follows the page, whatever changed it
     a.bsr16('seg_tick')                           # 7-segment line ticker
     a.bsr16('lp_idle')                            # looper clock, layer starts, LOOP page refresh
     a.bsr16('keys_idle')                          # KEYS: sampling timer / onset, pending note-ons
     a.bsr16('boot_lights')                        # boot: the pad light sweep
+    a.bsr16('bt_mask')                            # LAB BUTTONS: every key to our screen while it is shown
     a.bsr16('lab_idle')                           # LAB: live analog bars
     a.bsr16('mfx_guard')                          # MFX: (re)load our DSP1 program while it is on
     a.bsr16('mfx_ctrl')                           # MFX: knobs / D-Beam / footswitch -> slot levels
@@ -3091,6 +3096,18 @@ def build():
     D.text(4, 19, 's_vuhelp1', 'font_tiny'); D.text(4, 25, 's_vuhelp2', 'font_tiny')
     a.rts()
     a.label('lab_vu_k'); a.jmp('done')
+    a.label('bt_mask')                                          # BUTTONS shown <=> all key groups masked
+    a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LAB, 'r0l'); a.bne('bt_off')
+    a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('bt_off')
+    a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('bt_off')
+    a.mov_b_from_abs(LTAB, 'r0l'); a.cmp_b_imm(1, 'r0l'); a.bne('bt_off')
+    a.mov_b_from_abs(BTON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('bt_x')
+    a.mov_w_from_abs(KEYMASK, 0); a.mov_w_to_abs(0, BTMASK); set_byte(BTON, 1)
+    a.mov_w_imm(0xFFFF, 0); a.mov_w_to_abs(0, KEYMASK); a.rts()
+    a.label('bt_off')                                           # anything else: the mask as it was
+    a.mov_b_from_abs(BTON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('bt_x')
+    a.mov_w_from_abs(BTMASK, 0); a.mov_w_to_abs(0, KEYMASK); set_byte(BTON, 0)
+    a.label('bt_x'); a.rts()
     a.label('lab_idle')                                         # ANALOG INPUTS shown: redraw every 40 ms
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_LAB, 'r0l'); a.bne('lbi_off')
     a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('lbi_off')
@@ -3909,7 +3926,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0), (MPADS, 0), (MBYP, 0), (MPLIT, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0), (MPADS, 0), (MBYP, 0), (MPLIT, 0), (BTON, 0),
                          (GOFF, 0), (GOFF + 1, 0), (KLFW, 0), (KLFR, 6), (KLFP, 0), (KLFF, 0), (KLFL, 0), (KLFD, 0), (TREMF, 64), (FLFO, 0),
                          (LFO_OFF, 0), (LFO_V, 0), (LFO_SH, 0), (LFO_PP, 0),
                          (KARP, 0), (KARR, 6), (KARG, 1), (KARO, 1), (AN, 0), (ACUR, 0xFF), (AOFF, 0),

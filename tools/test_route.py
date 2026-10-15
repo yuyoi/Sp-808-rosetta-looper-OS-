@@ -79,7 +79,9 @@ def main(image_path, out):
     shots.append(('BEAM L moved to 250', sim.shot()))
     e.ww(bm.ENC_DELTA, -3); sim.run(10); e.ww(bm.ENC_DELTA, 0)
     print('dial -1    channel', e.rb(bm.LCH), '(expect 8)')
+    sim.stock_eats = True; e.ww(bm.KEYMASK, 0x0002)          # like hw: stock key groups eat INFO, MARK, ...
     sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.key(bm.K_ENTER); sim.run(10)
+    print('BUTTONS    key mask %04X (expect FFFF: every key to our screen)' % e.rw(bm.KEYMASK))
     shots.append(('LAB buttons (nothing yet)', sim.shot()))
     for code in (0x93, 0x4093, 0x101, 0xC0):
         sim.key(code); sim.run(5)
@@ -87,6 +89,12 @@ def main(image_path, out):
         print('key %04X   LKEYW %04X  row [%s]' % (code, e.rw(bm.LKEYW), row))
     shots.append(('LAB buttons: INFO', sim.shot()))
     sim.key(0x4093); sim.run(5); shots.append(('LAB buttons: MARK released', sim.shot()))
+    sim.key(bm.K_ENTER); sim.run(10); print('menu open  key mask %04X (expect 0002 again)' % e.rw(bm.KEYMASK))
+    sim.key(bm.K_ENTER); sim.run(10); print('BUTTONS    key mask %04X (expect FFFF)' % e.rw(bm.KEYMASK))
+    sim.key(bm.K_EXIT); sim.run(10); print('EXIT       page %d key mask %04X (expect 0, 0002)' % (e.rb(bm.PAGE), e.rw(bm.KEYMASK)))
+    sim.key(bm.K_ENTER); sim.run(10); print('LAB again  tab %d key mask %04X (expect 1, FFFF)' % (e.rb(bm.LTAB), e.rw(bm.KEYMASK)))
+    sim.call('menu', 1); print('leave evt  key mask %04X (expect 0002)' % e.rw(bm.KEYMASK)); sim.run(10)
+    sim.stock_eats = False
     # ---- LAB: LED SHOW (Roland's LED on / off modelled on the state bits) ----
     leds = []
     def led_mask(code): return e.rw(bm.LED_MASKS + 2 * (code & 15)), bm.LED_ROWS + 2 * ((code >> 4) & 15)

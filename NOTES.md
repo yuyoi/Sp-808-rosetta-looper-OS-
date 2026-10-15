@@ -249,6 +249,17 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
   no stuck links. Reverse + loop: same (peak 0.094 constant, 1002 Hz, 4 handoffs, clean release).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
+### v1.96 (1196, 2026-10-15): LAB BUTTONS sees every key
+- **hw v1.95:** menus OK (names back). LAB BUTTONS stayed empty: the key dispatcher 0x13F2F0 gives each key to
+  its group handler first (KEYGROUP_TABLE, 16 groups) and only sends it to the screen (event 9) when the handler
+  returns 0; most stock groups eat their keys. Only arrows (group 7) and EXIT / ENTER (group 11) got through.
+  The test harness skipped unhooked groups (r = 0), so the BUTTONS test passed with keys hw never delivers.
+- **Fix:** `bt_mask` (idle): while LAB BUTTONS is shown, KEYMASK 0x427906 = FFFF (every group skipped -> every key
+  to our screen); the old mask comes back on ENTER (menu), EXIT, any other tab and the leave event (BTMASK / BTON).
+  Harness: KeysSim honours KEYMASK, and `stock_eats = True` makes unhooked groups eat keys like hw.
+- **hw LCD ICONS (v1.95, photo):** all 184 free 7-seg bits on -> nothing new lights. The same LCD RAM words show
+  our VER / POLY digits, so the writes do reach the glass: those bits drive no segments. No hidden icons.
+
 ### v1.95 (1195, 2026-10-15): data tables word-aligned (v1.94 hw bug)
 - **hw v1.94:** MFX / ROUTING pages show numbers (64, 100) but every name value is blank (ENGINE, SLOT AT, PRESET,
   FX AT). Slot select itself works.
