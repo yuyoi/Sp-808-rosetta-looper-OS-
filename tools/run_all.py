@@ -59,7 +59,7 @@ def main():
             odd = int(m.group(1)) if m else -1
             bp = os.path.join(o.base, t + '.txt')
             if os.path.exists(bp):
-                strip = lambda s: [l for l in s.splitlines() if not l.startswith('[run_all]')]
+                strip = lambda s: [l for l in s.splitlines() if not l.startswith('[run_all]') and not l.endswith('.png')]
                 d = [l for l in difflib.unified_diff(strip(open(bp, errors='replace').read()), strip(txt), n=0, lineterm='')
                      if l[:1] in '+-' and not l.startswith(('+++', '---'))]
                 diff = '%d' % len(d)
