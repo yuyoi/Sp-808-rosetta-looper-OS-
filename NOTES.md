@@ -250,6 +250,9 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - Program end 0x2F1 of 0x2F2 words: DSP1 is now full.
 
 ### v1.94 (1194, 2026-10-15, emulator-tested, NOT on hw): voice modes MONO / GLIDE / UNISON
+- **Validated (2026-10-15 ~03:15):** build staged in work/v194 (source 74978c7, also has the MFX pad switches and the
+  boot sweep): the full test_v10 suite passes (same results as v1.91) and so do test_route / kset / padled / lfo /
+  arp / voice / mfx.
 - **VOICE tab** (DDS-DSP, 6th: VOICE MODE): MODE POLY / MONO / UNISON, GLIDE (OFF, 10-2000 ms), SPREAD (unison
   detune 0-15).
 - Notes flow pads / MIDI -> ARP (if on) -> voice mode (vm_on / vm_off) -> keys_note_on / off, so MONO + ARP = a mono
