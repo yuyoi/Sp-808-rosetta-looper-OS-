@@ -515,7 +515,10 @@ INIT_MFX = []                                   # MFX lane
 INIT_LOOP = []                                  # Looper v2 lane
 STRS_LEAD = []                                  # (label, text): lead lane
 STRS_MFX = []                                   # MFX lane
-STRS_LOOP = []                                  # Looper v2 lane
+STRS_LOOP = [('s_lv_dbg1', 'TRACE  ENTER=MS'), ('s_lv_dbg2', 'MS SINCE PRESS  ENTER=OFF')]   # Looper v2 lane
+LV_TRT = LANE_RAM['loop'][0]                    # 16 words: ms since the last looper press, per trace entry
+LV_T0 = LANE_RAM['loop'][0] + 0x20              # long: tick of the last looper press
+LV_IDLE1 = LANE_RAM['loop'][0] + 0x24           # byte: 1 = the looper take's first record idle not traced yet
 FX_LOAD_PATCH, FX_PATCH_BUF = 0x1081D6, 0x42235E   # stock: load the FX patch at er0 (algorithm word first); current patch
 MF_CODE_NAMES = ['OFF', 'SEND/RETURN', 'TR.A PRE-EQ', 'TR.A POST-EQ', 'TR.B PRE-EQ', 'TR.B POST-EQ', 'TR.C PRE-EQ',
                  'TR.C POST-EQ', 'TR.D PRE-EQ', 'TR.D POST-EQ', 'MIC/LINE PRE-EQ', 'MIC/LINE POST', 'MASTER', 'RECORD',
@@ -800,7 +803,8 @@ def build():
     a.cmp_b_imm(P_MFX, 'r0l'); a.beq16('k_mf')
     a.cmp_b_imm(P_LOOP, 'r0l'); a.bne16('k_other')
     a.cmp_w_imm(K_ENTER, 5); a.bne('kl_nent')                     # LOOP page: ENTER = debug trace on/off
-    a.mov_b_from_abs(LDEBUG, 'r0l'); a.xor_b_imm(1, 'r0l'); a.mov_b_to_abs('r0l', LDEBUG); a.bra16('redraw')
+    a.mov_b_from_abs(LDEBUG, 'r0l'); a.inc_b('r0l'); a.cmp_b_imm(3, 'r0l'); a.bcs('lv_dbgm'); a.mov_b_imm(0, 'r0l')
+    a.label('lv_dbgm'); a.mov_b_to_abs('r0l', LDEBUG); a.bra16('redraw')       # ENTER: trace values / ms / off
     a.label('kl_nent')                                            # v1.9 stopgap (Looper v2 gets the ASSIGN menu):
     a.cmp_w_imm(K_EXIT, 5); a.bne('kl_nex')                       # EXIT = stop (stopped / empty: home)
     a.mov_b_from_abs(LSTATE, 'r0l'); a.cmp_b_imm(LS_PLAY, 'r0l'); a.beq('kl_stop')
@@ -2684,6 +2688,7 @@ def build():
     a.bsr16('rec_init')
     a.btst_abs(0, LOOPTAKE); a.beq16('w22_ret')
     a.bsr16('lp_clock'); a.mov_l_from_abs(LPHASE, 0); a.mov_l_to_abs(0, LTAKE_PH)   # overdub starts here
+    trace_b('K', LSTATE); set_byte(LV_IDLE1, 1)                 # looper take armed (0x22 enter)
     a.bra16('w22_ret')
     a.label('w22_n0')
     a.cmp_w_imm(0x0009, 6); a.bne16('w22_stock')
@@ -2776,6 +2781,7 @@ def build():
     set_byte(LP_WRITTEN, 0); a.bsr16('lp_layer_done'); a.bra16('w23_out')     # outside the commit
     a.label('w23_l6')
     a.cmp_w_imm(0x0002, 6); a.bne('w23_l2')
+    trace('B', lambda: a.mov_w_imm(0, 0))                        # stock write begins
     a.mov_w_rr(6, 0); a.jsr(STOCK_SCR23)                        # stock writes the take into its pad
     set_byte(LP_WRITTEN, 1)
     trace('W', lambda: (a.mov_b_from_abs(SMP_PAD, 'r0l'), a.extu_w(0)))
@@ -2907,7 +2913,11 @@ def build():
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, REC_T0)    # the timer starts with the signal
     a.label('ri_rec')
     since(REC_T0); a.mov_l_to_abs(0, REC_MS)
-    a.btst_abs(0, LOOPTAKE); a.beq('ri_frame')
+    a.btst_abs(0, LOOPTAKE); a.beq16('ri_frame')
+    a.btst_abs(0, LV_IDLE1); a.beq('lv_ri1')                    # first idle: I = waiting-signal byte, trigger mode
+    set_byte(LV_IDLE1, 0)
+    trace('I', lambda: (a.mov_b_from_abs(SIG_WAIT_LO, 'r0h'), a.mov_b_from_abs(TRIG_MODE, 'r0l')))
+    a.label('lv_ri1')
     a.bsr16('lp_clock'); a.bsr16('lp_sched')                    # looper: layers keep starting on time
     a.mov_b_from_abs(LSTATE, 'r0l'); a.cmp_b_imm(LS_DUB, 'r0l'); a.bne('ri_rec1')
     a.mov_w_from_abs(LLEN_MS, 0); a.extu_l(0); a.add_l_imm(DUB_MARGIN_MS, 0)       # overdub: one loop + margin
@@ -3741,6 +3751,7 @@ def build():
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LCLK_LAST)
     set_byte(LRUN, 1); a.bclr_abs(0, LPEND)
     a.mov_b_from_abs(LAYPAD, 'r0l'); a.extu_w(0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
+    trace('N', lambda: a.mov_w_imm(0, 0))                        # layer 1 note-on
     a.bra16('ls_out')
     a.label('ls_run')
     for i in range(1, MAX_LAYERS):
@@ -3755,6 +3766,7 @@ def build():
         a.mov_l_from_abs(TICK_MS, 0); a.sub_l(4, 0); a.bmi(spin)
         a.bclr_abs(i, LPEND)
         a.mov_b_from_abs(LAYPAD + i, 'r0l'); a.extu_w(0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
+        trace('N', lambda: a.mov_w_imm(i, 0))                    # layer i+1 note-on
         a.bsr16('lp_clock'); a.bra16('ls_out')                                         # one start per pass
         a.label(nx)
     a.label('ls_out')
@@ -3804,7 +3816,11 @@ def build():
 
     # PAD SAMPLING / footswitch pressed
     a.label('lp_press')
+    a.push_l(0); a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LV_T0); a.pop_l(0)   # trace ms count from here
     trace_b('R', LSTATE)
+    a.btst_abs(0, LOOPTAKE); a.beq('lv_pnq')
+    trace('Q', lambda: a.mov_w_from_abs(REC_MS + 2, 0))         # a press during a take: its record ms so far
+    a.label('lv_pnq')
     set_byte(LMSG, 0); set_byte(LPRESSED, 1)
     a.mov_b_from_abs(LSTATE, 'r0l'); a.mov_b_to_abs('r0l', LST_AT_PRESS)
     since(LPRESS_T); a.mov_l_from_abs(TICK_MS, 1); a.mov_l_to_abs(1, LPRESS_T)
@@ -3981,8 +3997,31 @@ def build():
     a.push_l(2)
     a.mov_b_from_abs(TR_POS, 'r2l'); a.mov_b_imm(3, 'r2h'); a.mulxu_b('r2h', 2); a.extu_l(2); a.add_l_imm(TRACE, 2)
     a.mov_b_st('r1l', 2); a.mov_b_st_disp('r0h', 1, 2); a.mov_b_st_disp('r0l', 2, 2)
+    a.push_l(0)                                                 # + ms since the last looper press (max 0xFFFF)
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_from_abs(LV_T0, 2); a.sub_l(2, 0)
+    a.cmp_l_imm(0x10000, 0); a.bcs('lv_tra'); a.mov_l_imm(0xFFFF, 0)
+    a.label('lv_tra')
+    a.mov_b_from_abs(TR_POS, 'r2l'); a.mov_b_imm(2, 'r2h'); a.mulxu_b('r2h', 2); a.extu_l(2); a.add_l_imm(LV_TRT, 2)
+    a.mov_w_st(0, 2)
+    a.pop_l(0)
     a.mov_b_from_abs(TR_POS, 'r2l'); a.inc_b('r2l'); a.and_b_imm(TR_N - 1, 'r2l'); a.mov_b_to_abs('r2l', TR_POS)
     a.pop_l(2); a.rts()
+    a.label('lv_trfmt_ms')                                      # entry r3l (mod 16) -> "Xdddd " @er1+ (ms, max 9999)
+    a.mov_b_rr('r3l', 'r2l'); a.and_b_imm(TR_N - 1, 'r2l'); a.mov_b_imm(3, 'r2h'); a.mulxu_b('r2h', 2)
+    a.extu_l(2); a.add_l_imm(TRACE, 2)
+    a.mov_b_ld(2, 'r0l'); a.bne('lv_tfl'); a.mov_b_imm(ord('-'), 'r0l')
+    a.label('lv_tfl'); a.mov_b_st('r0l', 1); a.adds1(1)
+    a.mov_b_rr('r3l', 'r2l'); a.and_b_imm(TR_N - 1, 'r2l'); a.mov_b_imm(2, 'r2h'); a.mulxu_b('r2h', 2)
+    a.extu_l(2); a.add_l_imm(LV_TRT, 2); a.mov_w_ld(2, 0)
+    a.bsr16('lv_dec4'); putc(' '); a.rts()
+    a.label('lv_dec4')                                          # r0 -> 4 decimal digits @er1+ (9999 max; uses er0, r2)
+    a.extu_l(0); a.cmp_l_imm(10000, 0); a.bcs('lv_d4'); a.mov_l_imm(9999, 0)
+    a.label('lv_d4')
+    for d in (1000, 100, 10):
+        a.mov_w_imm(d, 2); a.divxu_w(2, 0); a.mov_w_rr(8, 2)                         # r0 = digit, r2 = rest
+        a.add_b_imm(0x30, 'r0l'); a.mov_b_st('r0l', 1); a.adds1(1)
+        a.mov_w_rr(2, 0); a.extu_l(0)
+    a.add_b_imm(0x30, 'r0l'); a.mov_b_st('r0l', 1); a.adds1(1); a.rts()
     a.label('hex4')                                             # r0 -> 4 hex digits @er1+ (uses r2)
     a.push_l(0); a.mov_b_rr('r0h', 'r0l'); a.bsr16('hex2'); a.pop_l(0)
     a.label('hex2')                                             # r0l -> 2 hex digits @er1+
@@ -4013,10 +4052,18 @@ def build():
     for line in range(3):                                       # the last 15 events, oldest first
         a.mov_l_imm(DBGTXT, 1)
         for k in range(5):
-            a.mov_b_from_abs(TR_POS, 'r3l'); a.add_b_imm(1 + 5 * line + k, 'r3l'); a.bsr16('tr_fmt')
+            ms, nx = uniq('lv_dm'), uniq('lv_dn')
+            a.mov_b_from_abs(TR_POS, 'r3l'); a.add_b_imm(1 + 5 * line + k, 'r3l')
+            a.mov_b_from_abs(LDEBUG, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq(ms)
+            a.bsr16('tr_fmt'); a.bra(nx)
+            a.label(ms); a.bsr16('lv_trfmt_ms')
+            a.label(nx)
         putc('\0')
         D.text(1, 8 + 6 * line, DBGTXT, 'font_tiny')
-    D.text(1, 27, 's_dbghelp', 'font_tiny')
+    a.mov_b_from_abs(LDEBUG, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq16('lv_dh2')    # help line: which page
+    D.text(1, 27, 's_lv_dbg1', 'font_tiny'); a.bra16('lv_dh')
+    a.label('lv_dh2'); D.text(1, 27, 's_lv_dbg2', 'font_tiny')
+    a.label('lv_dh')
     a.bsr16('gfx_flush')
     a.pop_l(3); a.pop_l(2); a.rts()
 
@@ -4025,7 +4072,7 @@ def build():
                  (LS_BUSY, 'icon_recring', 's_ls2', 's_lh2'), (LS_PLAY, 'icon_play', 's_ls3', 's_lh3'),
                  (LS_DUB, 'icon_recdot', 's_ls4', None), (LS_STOP, 'icon_stop', 's_ls5', 's_lh5')]
     a.label('lp_draw')
-    a.btst_abs(0, LDEBUG); a.bne16('lp_draw_dbg')
+    a.mov_b_from_abs(LDEBUG, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('lp_draw_dbg')
     a.push_l(2); a.push_l(3)
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, LDRAW_T)
     a.bsr16('gfx_clear')
