@@ -296,7 +296,21 @@ Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note f
     KEYS round trip).
 
 #### Lane LOOP: Looper v2
-- (nothing yet)
+- **2026-10-15, user decisions for v2:** faders = loop n pinned to the Tr.n voice (stock faders); the 4 loops = fixed
+  pads in their own pad bank; loop select = simple first (an on-screen selector, maybe "move a fader to select" or
+  "next loop at the wrap" later). v0.9b hw test list handed to the user (runs through the lead). RE only until the
+  plan is OK'd and the hw test is in.
+- **RE: where a pad gets its voice (= the pin point).** Pad note-on 0x13749E queues (bit 2 of +1, 0x150CEE) only
+  when busy, else 0x137534 -> **0x14EC5E(r0l = pad, er1 = params)**. At **0x14EC7E `jsr 0x1000A6`** (flags +14) picks
+  the voice slot **0-3** (only 4 stream voices for pads and tracks together):
+  1. 0x100278: a slot whose class byte 0x40330A[s] & 0x70 equals flags & 0x70 (same group retriggers its slot);
+  2. else the first s with 0x403302[s] == 0x96 (idle) and not in busy mask @0x40330E | @0x40330F;
+  3. else 0x1002A6 steals (busy | 0x43B626 | slots with 0x40330A[s] & 3).
+  Then 0x43B62D[slot] = param +2, voice setup 0x14EA28(slot), 0x43B635[pad] = slot, 0x43B631[slot] = pad + 0x10;
+  a pad that owned the slot before is stopped (0x1375A8). Other 0x1000A6 caller: 0x14EEB8 (not looked at).
+  **Plan:** patch that jsr to `lv_alloc`: looper bank + loop pad k -> slot k, else jmp 0x1000A6. Still to prove in
+  the emulator: slot n = the mixer channel that fader n (LEVEL index 11) drives.
+  **Limit:** 4 loops = all 4 voices, so no other pads / tracks while 4 loops play (8 mono = the voice hack, later).
 
 ### v1.97 (1197, 2026-10-15): MFX effects (user: per-slot TYPE; FILTER, DRIVE/LO-FI, DELAY, MOD; tested via line in)
 - **DSP1 program (tools/mfxdsp.py, 0x3C..0x28F of 0x2F1):** every slot runs FILTER -> DRIVE+CRUSH -> MOD -> DELAY;
