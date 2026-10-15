@@ -263,7 +263,28 @@ Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note f
   pad hit still picks a source.
 
 #### Lane MFX: effect modes and sound
-- (nothing yet)
+- **2026-10-15: CHORUS / FLANGER / PHASER as own TYPEs (5-7)** (user chose: own TYPEs, stereo chorus/flanger, 2-notch
+  mono phaser). Emulator-tested, NOT on hw.
+  - **Scheduler (mfxdsp.Seq/schedule):** the old one-after-another placement left 216 nops in 581 words. Now the words
+    are recorded in dataflow order and list-scheduled with the decoded ESP dependencies (acc read sees t-3, so a new
+    chain may start under a pending store; IRAM/GRAM/mulcoeff/eramvar RAW/WAR/WAW; ERAM starts >= 6 apart, eramrd
+    window; dmac adjacent). Roland's own FX code does the same overlap (316 of 715 A-stores have A macs in the 2 words
+    before), so it's hw behaviour. The v1.97 selftest gave bit-identical numbers after the reschedule.
+  - **SVF f through mc2** (`op30(2)` + dmac instead of coef pairs, same 15-bit precision): mc2 = fbase + span * u^2,
+    u = the slot's MOD triangle (last sample) mapped to 0..1. FILTER = span 0, exact as before.
+  - **CHORUS / FLANGER:** the DELAY read offset += tri * depth (coef + dmac pair, 1/8-sample steps); a second
+    READvar pair (`es0`/`es1`, landing FE/FF) at offset - tri * depth = R. mc6 is read LIVE from eramvar, so the L
+    interpolation must finish before the R eramvar (B accumulator) is written. In DELAY R reads the same offset, R = L.
+    Each such slot gets MODLINE = 1024 words at the top of the delay RAM (MREGM bit 3+k), DELAY slots split the rest.
+  - **Delay target resolution:** etb/etc only gave 16-sample steps (that was the v1.97 "echo 13264 for 13272" and the
+    -5 in the DELAY selftest), which put the flanger's 4-sample minimum below zero = no wet. New word `etd` =
+    -8 (half & 7): 2-sample steps (the accumulator is integer and the glide is NV = 128 T', so 1 sample needs T' 0.5).
+  - **PHASER:** input (L+R)/2 (`xil`/`xir`), L SVF = ap1 = x - 2q bp (wb at SH5), R SVF input = ap1 (`sr`/`sf`), out
+    = (x + ap1 - 2q bp)/2 (`xdry`), DRIVE dry L takes FR (`ddx`) so L = R. Model: notches at 62 / 362 Hz for f 150 Hz
+    (theory 0.414 f / 2.414 f), ~1250 Hz at the 3 kHz top (the 2nd notch fades there: Chamberlin at f 0.43).
+  - Program end 0x2D0 (32 words left). Host: MVAL (49) / MSHAD (58 x 3 x 2) moved to the MFX lane RAM 0xC00-0xD90.
+  - Test: tools/test_mfx_mod.py (firmware words vs model, mask / WRITE bases / R groups, taps, feedback, phaser sweep,
+    KEYS round trip).
 
 #### Lane LOOP: Looper v2
 - (nothing yet)
