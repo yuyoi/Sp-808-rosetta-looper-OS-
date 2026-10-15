@@ -11,7 +11,7 @@ def main(image_path):
     e = sim.e
     W = lambda n: (bm.dsp_addr(n) & 0xFFC) >> 2
     cf = lambda n: sim.prog[W(n)] & 0xFF
-    for v_, val_ in ((bm.KTHRU, 1), (bm.KMXS, 0), (bm.KSUS, 16), (bm.KLAF, 6), (bm.KFDEC, 6), (bm.KSTEP, 1), (bm.KPW, 8),
+    for v_, val_ in ((bm.KTHRU, 1), (bm.KMXS, 16), (bm.KSUS, 16), (bm.KLAF, 6), (bm.KFDEC, 6), (bm.KSTEP, 1), (bm.KPW, 8),
                      (bm.KDET, 2), (bm.KOCT, 2), (bm.TREMF, 64), (bm.KLFR, 6), (bm.KARR, 6), (bm.KARG, 1), (bm.KARO, 1),
                      (bm.ACUR, 0xFF), (bm.MV, 0xFF), (bm.KUS, 8)): e.wb(v_, val_)
     e.wb(bm.PAGE, bm.P_HOME); sim.call('menu', 0); sim.run(5)

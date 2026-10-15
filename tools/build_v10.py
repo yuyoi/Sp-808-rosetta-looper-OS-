@@ -487,7 +487,7 @@ VULIT, VUT = RAM_BASE + 0x45B, RAM_BASE + 0x490                                #
 # MFX (v1.91, interface + hooks; the sound blocks come later): our DSP1 program (mfxdsp.py) serves DSP0's three FX
 # insert slots (mixer group 7 index 0/1/2). Slot 1 goes through the stock FX LOCATION (so the EFFECTS button and the
 # OS's own re-apply on pad playback agree with it), slots 2/3 are written straight (the OS never touches them).
-MON, MLOADED, MTAB, MCUR = (RAM_BASE + 0x430 + i for i in range(4))
+MON, MLOADED, MTAB, MFCUR = (RAM_BASE + 0x430 + i for i in range(4))   # v1.98: MFCUR (was MCUR = the MPC cursor too)
 MSLOT, MLVL, MCTRL, MCLAST = RAM_BASE + 0x434, RAM_BASE + 0x437, RAM_BASE + 0x43A, RAM_BASE + 0x440   # 3, 3, 6, 6 bytes
 MSAVEIDX, MSAVEFLG = RAM_BASE + 0x446, RAM_BASE + 0x447   # the stock FX LOCATION before MFX went on
 MPADS, MBYP, MPLIT = RAM_BASE + 0x500, RAM_BASE + 0x501, RAM_BASE + 0x502   # pads 1-3 = slot switches; bypassed bits
@@ -541,6 +541,10 @@ MFX_TABS = [
 KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BASE + 0x324, RAM_BASE + 0x326, RAM_BASE + 0x39C
 # S-EDIT (v1.91 on the Mac engine): rows in the old order (RELEASE, THRU, REVERSE, LOOP: ENTER still toggles), then
 # the knob-driven values read-only. One tab, so no submode menu.
+# v1.98 synth only: with SAMPLE 0 the KEYS page plays at once, no source pad. Raising SAMPLE then = pick a pad first.
+KNOSMP = LANE_RAM['lead'][0]                                            # 1 = playing without a source sample
+INIT_LEAD += [(KNOSMP, 0)]
+STRS_LEAD += [('s_ksynth', 'SYNTH ONLY')]
 KSTAB = RAM_BASE + 0x45C
 KSET_TABS = [('KEYS SOUND', [('RELEASE', KREL, 0, len(REL_MS) - 1, None, ('t', 'rel_ms', 'MS')),
                              ('THRU', KTHRU, 0, 1, 'kse_thru', ('s', 'mf_offon', 2)),
@@ -555,7 +559,7 @@ MAC_PAGES = [dict(pid='ks', name='S-EDIT', tabs=KSET_TABS, tab=KSTAB, cur=KSCUR,
                   tab=KDTAB, cur=KDCUR),
              dict(pid='rt', name='ROUTING', tabs=ROUTE_TABS, tab=RTAB, cur=RCUR),
              dict(pid='lb', name='LAB', tabs=LAB_TABS, tab=LTAB, cur=LCURX),
-             dict(pid='mf', name='MFX', tabs=MFX_TABS, tab=MTAB, cur=MCUR)]   # a str instead of items: own body
+             dict(pid='mf', name='MFX', tabs=MFX_TABS, tab=MTAB, cur=MFCUR)]   # a str instead of items: own body
 MAC_STRS = []
 for P_ in MAC_PAGES:
     MAC_STRS += [('s_%snm' % P_['pid'], P_['name'])]
@@ -1110,10 +1114,14 @@ def build():
     D.text(1, 27, 's_khelp', 'font_tiny'); a.bra16('dk_grid')
     a.label('dk_bsel'); D.text(1, 27, 's_kbsel', 'font_tiny'); a.bra16('dk_grid')
     a.label('dk_rec'); D.text(1, 11, 's_ksamp'); D.text(1, 27, 's_kwait', 'font_tiny'); a.bra16('dk_grid')
-    a.label('dk_play'); D.text(1, 11, 's_kplay'); D.text(1, 27, 's_kphelp', 'font_tiny')
+    a.label('dk_play'); D.text(1, 27, 's_kphelp', 'font_tiny')
+    a.mov_b_from_abs(KNOSMP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('dk_src')
+    D.text(1, 11, 's_ksynth'); a.bra16('dk_rel')                                     # v1.98: SYNTH ONLY
+    a.label('dk_src'); D.text(1, 11, 's_kplay')
     a.mov_b_from_abs(KSRC, 'r0l'); a.bsr16('dec2')                                     # PLAY SRC nn
     a.mov_b_to_abs('r0h', PADSTR); a.mov_b_to_abs('r0l', PADSTR + 1); set_byte(PADSTR + 2, 0)
     D.text(55, 11, PADSTR)
+    a.label('dk_rel')
     a.mov_b_from_abs(KREL, 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0)              # "PLAY REL 200MS"
     a.mov_l_imm('rel_ms', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 0)
     a.mov_l_imm(KRELSTR, 1); a.bsr16('fmt_u')
@@ -1367,6 +1375,8 @@ def build():
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_PLAY, 'r0l'); a.beq('ke_out')     # a sample is loaded: keep it
     set_byte(KSTATE, KS_IDLE)
     dsp_coef('thru_l', THRU); dsp_coef('thru_r', THRU)                               # hear the pads meanwhile
+    a.mov_b_from_abs(KMXS, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne16('ke_out')
+    a.bsr16('keys_synth_only')                                                       # v1.98: SAMPLE 0 = play at once
     a.label('ke_out')
     a.mov_b_imm(0xFF, 'r0l')
     for i in range(3): a.mov_b_to_abs('r0l', KNOB + i)                              # knobs: apply all on the next poll
@@ -1462,6 +1472,12 @@ def build():
         a.label('dds_ap%d' % i)
         a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dds_go%d' % i); a.rts()   # only while KEYS owns DSP1
         a.label('dds_go%d' % i)
+        if nm == 'mxs':                        # v1.98: SAMPLE above 0 without a source sample -> pick a pad first
+            nn = uniq('dns')
+            a.mov_b_from_abs(KNOSMP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq(nn)
+            a.mov_b_from_abs(KMXS, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq(nn)
+            a.bra16('keys_need_src')
+            a.label(nn)
         sh = keysdsp.shsel(DSP_PROG, DSP_PARAMS, 'v0_' + nm)
         for v in range(NV):
             sk = uniq('dsk')
@@ -1693,6 +1709,22 @@ def build():
     a.mov_b_from_abs(KSRC, 'r0l'); a.extu_w(0); a.mov_b_imm(0, 'r1l'); a.jsr(STOP_PAD)
     a.rts()
 
+    a.label('keys_synth_only')                 # v1.98, SAMPLE 0: PLAY without a source (the sample layer is muted, voices
+    set_byte(KNOSMP, 1)                        # hold while held), as after a take
+    a.mov_l_imm(KEYS_MAX_MS, 0); a.mov_l_to_abs(0, KREC_MS)                          # any length: nothing reads it
+    voices_silent()
+    set_byte(KSTATE, KS_PLAY)
+    dsp_coef('age_e_g', 0); set_byte(KAEP, 1); a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, KAE_T)
+    a.bsr16('keys_loop_setup')
+    a.bsr16('keys_thru_apply')
+    a.rts()
+    a.label('keys_need_src')                   # SAMPLE raised while synth only: back to picking, the next pad = the source
+    set_byte(KNOSMP, 0)
+    voices_silent()
+    set_byte(KSTATE, KS_IDLE)
+    dsp_coef('thru_l', THRU); dsp_coef('thru_r', THRU)
+    a.rts()
+
     a.label('keys_sample')                     # ENTER: play the source pad through DSP1 and record it there
     set_byte(KBSEL, 0)
     a.mov_b_from_abs(KSTATE, 'r0l'); a.cmp_b_imm(KS_IDLE, 'r0l'); a.beq('ks_go')
@@ -1711,6 +1743,7 @@ def build():
     dsp_coef('thru_l', THRU); dsp_coef('thru_r', THRU)
     dsp_eram('rec_w0', 0x10, 0); dsp_eram('rec_w1', 0x10, 0x10000)
     a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, KREC_T0)
+    set_byte(KNOSMP, 0)                                                              # a real source from now
     set_byte(KSTATE, KS_WAIT)
     a.mov_b_from_abs(KSRC, 'r0l'); a.extu_w(0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
     a.label('ks_out'); a.rts()
@@ -4209,7 +4242,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0), (MPADS, 0), (MBYP, 0), (MPLIT, 0), (BTON, 0), (MTYPE, 0), (MTYPE + 1, 0), (MTYPE + 2, 0), (MREGM, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MFCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0), (MPADS, 0), (MBYP, 0), (MPLIT, 0), (BTON, 0), (MTYPE, 0), (MTYPE + 1, 0), (MTYPE + 2, 0), (MREGM, 0),
                          *((MP + i_, 0) for i_ in range(9)),
                          (GOFF, 0), (GOFF + 1, 0), (KLFW, 0), (KLFR, 6), (KLFP, 0), (KLFF, 0), (KLFL, 0), (KLFD, 0), (TREMF, 64), (FLFO, 0),
                          (LFO_OFF, 0), (LFO_V, 0), (LFO_SH, 0), (LFO_PP, 0),
