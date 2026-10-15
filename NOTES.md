@@ -296,6 +296,12 @@ Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note f
     KEYS round trip).
 
 #### Lane LOOP: Looper v2
+- **v0.9b HW TEST (2026-10-15, v1.97 on the card, PAD SAMPLING):** layer 1 records and loops OK; **loop 1 keeps
+  playing during DUB** and the screen shows DUB (overdub-while-playing works on hw). Bugs: (1) DUB never ends by itself
+  after one loop; (2) a tap during DUB ends it but the layer is lost; (3) lag = a gap between the closing tap and
+  loop 1 starting. Emulator (test_v09 + build_v10, unknown stock calls 0x132880 / 0x132866 as no-ops): DUB auto-ends
+  after one loop and layer 2 is kept, so the hw difference sits in stock behaviour the sim fakes. Waiting for a
+  repro + trace photo from the user.
 - **RE pass 2 (2026-10-15, emulator): voice slot n = mixer group n = fader n. PROVEN, with one catch.**
   - Fader poll **0x13570E**: table 0x164C42 = (ADC, strip) pairs 0/0 1/1 2/2 3/3 5/6; ADC 4 -> strip 4 (MIC/LINE) or 5
     (if 0x1364BC != 0). Strip records 0x426DDE + 0x12 * strip (+2 last raw, +4 value). Change -> 0x135806(strip, flags)
