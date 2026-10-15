@@ -253,7 +253,14 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note first under each heading.
 
 #### Lane LEAD: KEYS / synth, merges, versions, the card
-- (nothing yet)
+- **Synth only (2026-10-15, user: "needs me to press a sample pad to get any sound"):** with SAMPLE 0, keys_enter goes
+  straight to PLAY with no source (`keys_synth_only`, KNOSMP = 1). The page shows SYNTH ONLY; the sample layer is
+  muted and voices hold while held, so the stale delay RAM is never heard. Raising SAMPLE while KNOSMP is set =
+  `keys_need_src`: back to IDLE, and the next pad hit picks the source as before. A real take clears KNOSMP. Test:
+  `test_synth.py` (out 261.5 Hz for C4, held 1.8 s, the source kept when SAMPLE goes back to 0).
+- **Cursor bug:** the MFX block redefined `MCUR` (0x433), so the MPC page cursor shared the MFX cursor byte. Renamed
+  MFX's to `MFCUR`; MPC's MCUR is RAM_BASE + 12 again. test_arp / test_voice now enter KEYS with SAMPLE 16, so their
+  pad hit still picks a source.
 
 #### Lane MFX: effect modes and sound
 - (nothing yet)

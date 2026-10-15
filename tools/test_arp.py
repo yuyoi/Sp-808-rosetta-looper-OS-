@@ -9,7 +9,7 @@ bm = test_v10.bm
 def main(image_path, out):
     sim = test_v10.KeysSim(open(image_path, 'rb').read(), bm.build()[1])
     e, shots = sim.e, []
-    for v_, val_ in ((bm.KTHRU, 1), (bm.KMXS, 0), (bm.KSUS, 16), (bm.KLAF, 6), (bm.KFDEC, 6), (bm.KSTEP, 1), (bm.KPW, 8),
+    for v_, val_ in ((bm.KTHRU, 1), (bm.KMXS, 16), (bm.KSUS, 16), (bm.KLAF, 6), (bm.KFDEC, 6), (bm.KSTEP, 1), (bm.KPW, 8),
                      (bm.KDET, 2), (bm.KOCT, 2), (bm.TREMF, 64), (bm.KLFR, 6), (bm.KARR, 6), (bm.KARG, 1), (bm.KARO, 1),
                      (bm.ACUR, 0xFF)): e.wb(v_, val_)
     e.wb(bm.PAGE, bm.P_HOME); sim.call('menu', 0); sim.run(5)
