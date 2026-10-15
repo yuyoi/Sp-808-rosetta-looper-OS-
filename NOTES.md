@@ -262,6 +262,13 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - UNISON: each note starts 4 voices (VDET = -3 / -1 / +1 / +3 x SPREAD / 4), half level each; POLY clears VDET.
 - MODE changes release every held voice and clear the offsets (no stuck or detuned voices).
 - ARP step clock now advances by exactly one step (AT += step, catch up if more than a step late): no tempo drift.
+- Emulator (`tools/test_voice.py`): POLY C+E = 261.6 / 329.6 Hz; UNISON SPREAD 8 = 4 voices at 256.0 / 259.7 / 263.5 /
+  267.3 Hz, level 24 each (half); MONO C then E on the same voice glides 261.6 -> 329.6 Hz in ~150 ms (GLIDE 150),
+  E up glides back to C, C up releases (MV FF); GLIDE OFF jumps; MONO + ARP = one voice at a time.
+- Fixed while testing v1.93: the ARP list shifts loaded the data byte into r1h while er1 was the pointer (insert /
+  remove in the middle of the list wrote the wrong cell, a released key stayed and its note hung); now r2l (saved).
+- Boot: a 3-pad light comet sweeps pads 1 -> 16 (30 ms a step) with the boot sound, then the stock pad LEDs come back
+  (pads_take / pads_give; KEYS starting meanwhile stops it cleanly).
 
 ### v1.93 (1193, 2026-10-15, emulator-tested, NOT on hw): arpeggiator
 - **ARP tab** (DDS-DSP menu, 5th: ARPEGGIATOR): MODE OFF / UP / DOWN / UP+DOWN / RANDOM, TEMPO 60-240 BPM (1/16 steps),

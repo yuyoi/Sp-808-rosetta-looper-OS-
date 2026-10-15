@@ -482,6 +482,7 @@ LED_CODES = [0xF4, 0x40, 0x41, 0x42, 0x43, 0x60, 0x62, 0x64, 0x66, 0x61, 0x63, 0
              0x1B, 0x21, 0x14, 0x15, 0x16, 0x17, 0x22, 0x10, 0x11, 0x12, 0x13]
 LEDIX, LEDON, LEDWAS, LEDAUTO, LEDT = RAM_BASE + 0x448, RAM_BASE + 0x449, RAM_BASE + 0x44A, RAM_BASE + 0x44B, RAM_BASE + 0x44C
 KPLED, KPSAVE, KPNEW = RAM_BASE + 0x450, RAM_BASE + 0x452, RAM_BASE + 0x454   # pad LEDs: shown, the stock's, wanted
+BLSTEP, BLT = RAM_BASE + 0x45D, RAM_BASE + 0x494                             # boot light sweep: step, last frame
 VULIT, VUT = RAM_BASE + 0x45B, RAM_BASE + 0x490                                # LAB PAD VU: pads taken, last frame
 # MFX (v1.91, interface + hooks; the sound blocks come later): our DSP1 program (mfxdsp.py) serves DSP0's three FX
 # insert slots (mixer group 7 index 0/1/2). Slot 1 goes through the stock FX LOCATION (so the EFFECTS button and the
@@ -675,12 +676,15 @@ def build():
     a.bsr16('seg_tick')                           # 7-segment line ticker
     a.bsr16('lp_idle')                            # looper clock, layer starts, LOOP page refresh
     a.bsr16('keys_idle')                          # KEYS: sampling timer / onset, pending note-ons
+    a.bsr16('boot_lights')                        # boot: the pad light sweep
     a.bsr16('lab_idle')                           # LAB: live analog bars
     a.bsr16('mfx_guard')                          # MFX: (re)load our DSP1 program while it is on
     a.bsr16('mfx_ctrl')                           # MFX: knobs / D-Beam / footswitch -> slot levels
     a.mov_b_from_abs(BOOTSND, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('id_dial')   # boot sound: pad 16, once
     set_byte(BOOTSND, 1)
     a.mov_w_imm(BOOT_PAD, 0); a.mov_b_imm(127, 'r1l'); a.jsr(PAD_NOTE_ON)
+    a.bsr16('pads_take'); set_byte(BLSTEP, 1)                                  # v1.94: a light sweep over the pads
+    a.mov_l_from_abs(TICK_MS, 0); a.mov_l_to_abs(0, BLT)
     a.label('id_dial')                            # VALUE dial: turn it into arrow keys
     a.mov_w_from_abs(ENC_DELTA, 0); a.beq16('done')
     a.mov_b_from_abs(PAGE, 'r1l')
@@ -1294,7 +1298,7 @@ def build():
     set_byte(KLOADED, 0); set_byte(KSTATE, KS_IDLE)                                  # then our program + sample are gone
     a.label('ke_ours')
     set_byte(KACTIVE, 1)
-    a.bsr16('vu_release'); a.bsr16('pads_take')                                      # pad LEDs show the held keys
+    a.bsr16('vu_release'); a.bsr16('bl_stop'); a.bsr16('pads_take')                  # pad LEDs show the held keys
     a.mov_b_from_abs(KLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('ke_loaded')
     a.bsr16('keys_load')
     a.label('ke_loaded')
@@ -1728,39 +1732,39 @@ def build():
     # ---- ARP (v1.93) ----
     a.label('arp_on')                          # r0l = key, r1l = level: ARP off -> straight on; else into the list
     a.mov_b_from_abs(KARP, 'r1h'); a.cmp_b_imm(0, 'r1h'); a.beq16('vm_on')
-    a.push_l(4); a.push_l(5)
+    a.push_l(2); a.push_l(4); a.push_l(5)
     a.mov_b_to_abs('r1l', ALVL)
     a.mov_b_from_abs(AN, 'r4l'); a.mov_b_imm(0, 'r4h')                          # r4h = insert position
     a.label('ao_f'); a.cmp_b_rr('r4l', 'r4h'); a.beq('ao_ins')                  # sorted insert (skip a repeat)
-    a.mov_b_rr('r4h', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r1h')
-    a.cmp_b_rr('r0l', 'r1h'); a.beq16('ao_x'); a.bcc('ao_ins')                   # held[i] == key: nothing; > key: here
+    a.mov_b_rr('r4h', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r2l')
+    a.cmp_b_rr('r0l', 'r2l'); a.beq16('ao_x'); a.bcc('ao_ins')                   # held[i] == key: nothing; > key: here
     a.inc_b('r4h'); a.bra('ao_f')
     a.label('ao_ins'); a.cmp_b_imm(8, 'r4l'); a.bcc16('ao_x')                    # full
     a.mov_b_rr('r4l', 'r5l')                                                     # shift [pos .. n-1] up by one
     a.label('ao_sh'); a.cmp_b_rr('r4h', 'r5l'); a.beq('ao_put')
-    a.mov_b_rr('r5l', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD - 1, 1); a.mov_b_ld(1, 'r1h')
-    a.adds1(1); a.mov_b_st('r1h', 1); a.dec_b('r5l'); a.bra('ao_sh')
+    a.mov_b_rr('r5l', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD - 1, 1); a.mov_b_ld(1, 'r2l')   # (er1 =
+    a.adds1(1); a.mov_b_st('r2l', 1); a.dec_b('r5l'); a.bra('ao_sh')                                       # pointer)
     a.label('ao_put'); a.mov_b_rr('r4h', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_st('r0l', 1)
     a.inc_b('r4l'); a.mov_b_to_abs('r4l', AN)
     a.cmp_b_imm(1, 'r4l'); a.bne('ao_x')                                         # the first key: step at once
     a.mov_l_from_abs(TICK_MS, 0); a.sub_l_imm(10000, 0); a.mov_l_to_abs(0, AT)
     set_byte(AIDX, 0xFF); set_byte(ADIR, 0)
-    a.label('ao_x'); a.pop_l(5); a.pop_l(4); a.rts()
+    a.label('ao_x'); a.pop_l(5); a.pop_l(4); a.pop_l(2); a.rts()
     a.label('arp_off')                         # r0l = key: ARP off -> straight off; else out of the list
     a.mov_b_from_abs(KARP, 'r1h'); a.cmp_b_imm(0, 'r1h'); a.beq16('vm_off')
-    a.push_l(4)
+    a.push_l(2); a.push_l(4)
     a.mov_b_from_abs(AN, 'r4l'); a.mov_b_imm(0, 'r4h')
     a.label('af_f'); a.cmp_b_rr('r4l', 'r4h'); a.beq16('af_x')
-    a.mov_b_rr('r4h', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r1h')
-    a.cmp_b_rr('r0l', 'r1h'); a.beq('af_rm'); a.inc_b('r4h'); a.bra('af_f')
+    a.mov_b_rr('r4h', 'r1l'); a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r2l')
+    a.cmp_b_rr('r0l', 'r2l'); a.beq('af_rm'); a.inc_b('r4h'); a.bra('af_f')
     a.label('af_rm')                                                             # shift [pos+1 .. n-1] down
     a.mov_b_rr('r4h', 'r1l'); a.inc_b('r1l'); a.cmp_b_rr('r4l', 'r1l'); a.beq('af_dn')
-    a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r1h'); a.subs1(1); a.mov_b_st('r1h', 1)
+    a.extu_w(1); a.extu_l(1); a.add_l_imm(AHELD, 1); a.mov_b_ld(1, 'r2l'); a.subs1(1); a.mov_b_st('r2l', 1)
     a.inc_b('r4h'); a.bra('af_rm')
     a.label('af_dn'); a.dec_b('r4l'); a.mov_b_to_abs('r4l', AN); a.bne('af_x')
     a.mov_b_from_abs(ACUR, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq('af_x')        # nothing held: the arp note ends
     a.bsr16('keys_note_off'); set_byte(ACUR, 0xFF)
-    a.label('af_x'); a.pop_l(4); a.rts()
+    a.label('af_x'); a.pop_l(4); a.pop_l(2); a.rts()
     a.label('arp_mode')                        # MODE changed: whatever the ARP plays stops, the list starts empty
     a.mov_b_from_abs(ACUR, 'r0l'); a.cmp_b_imm(0xFF, 'r0l'); a.beq('am_x')
     a.bsr16('keys_note_off'); set_byte(ACUR, 0xFF)
@@ -1959,6 +1963,20 @@ def build():
         a.label(nx)
     a.mov_w_from_abs(KPNEW, 0); a.mov_w_to_abs(0, KPLED)
     a.label('kpl_x'); a.rts()
+    a.label('boot_lights')                                      # a 3-pad comet from pad 1 to 16, 30 ms a step
+    a.mov_b_from_abs(BLSTEP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('bl_x')
+    a.mov_b_from_abs(KACTIVE, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.bne('bl_end')      # KEYS took the pads meanwhile
+    a.mov_l_from_abs(TICK_MS, 1); a.mov_l_from_abs(BLT, 2); a.sub_l(2, 1); a.cmp_l_imm(30, 1); a.bcs16('bl_x')
+    a.mov_l_from_abs(TICK_MS, 1); a.mov_l_to_abs(1, BLT)
+    a.cmp_b_imm(19, 'r0l'); a.bcc('bl_done')
+    a.inc_b('r0l'); a.mov_b_to_abs('r0l', BLSTEP); a.add_b_imm(0xFE, 'r0l')        # pads n-3 .. n-1 (bits)
+    a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 0); a.mov_l_imm('bl_tab', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 0)
+    a.mov_w_to_abs(0, KPNEW); a.bra16('pads_apply')
+    a.label('bl_done'); set_byte(BLSTEP, 0); a.bra16('pads_give')
+    a.label('bl_stop'); a.mov_b_from_abs(BLSTEP, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('bl_x')   # cut short: pads back
+    set_byte(BLSTEP, 0); a.bra16('pads_give')
+    a.label('bl_end'); set_byte(BLSTEP, 0)
+    a.label('bl_x'); a.rts()
     a.label('pads_take')                                        # keep the stock's pad LEDs, then all off (ours now)
     a.mov_w_from_abs(LED_ROWS + 2, 0); a.mov_w_to_abs(0, KPSAVE)
     for p_ in range(16): a.mov_w_imm(0x10 + p_, 0); a.jsr(LED_OFF)
@@ -3758,6 +3776,7 @@ def build():
     for i in range(len(LFO_WAVES)): a.dc_l('s_lfw%d' % i)
     a.label('lfo_rn')
     for i in range(len(LFO_HZ)): a.dc_l('s_lfr%d' % i)
+    a.label('bl_tab'); a.raw(struct.pack('>18H', *[(7 << n >> 2) & 0xFFFF for n in range(18)]))   # comet frames
     a.label('vu_map')                                           # level 0..127 -> lit pads (4.5 dB each) as bits
     a.raw(bytes(0 if v == 0 else (1 << max(0, min(8, round(8 + 20 * math.log10(v / 127) / 4.5)))) - 1 for v in range(128)))
     a.align2()
@@ -3862,7 +3881,7 @@ def main(raw, outdir):
         for v_, val_ in ((KMXS, 16), (KMXSAW, 0), (KMXPUL, 0), (KPW, 8), (KMXTRI, 0), (KMXUNI, 0), (KDET, 2), (KOCT, 2), (KDCUR, 0)):
             a.mov_b_imm(val_, 'r0l'); a.mov_b_to_abs('r0l', v_)
         for v_, val_ in ((KDTAB, 0), (KDEC, 0), (KSUS, 16), (KFENV, 0), (KFDEC, 6), (KLAA, 0), (KLAF, 6), (KFE_CUR, 0),
-                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0),
+                         (KDMENU, 0), (KDMSEL, 0), (KDTOP, 0), (RTAB, 0), (RCUR, 0), (RPRE, 0), (KSTEP, 1), (LTAB, 0), (LCURX, 0), (LCH, 9), (MON, 0), (MLOADED, 0), (MTAB, 0), (MCUR, 0), (LEDIX, 0), (LEDON, 0), (LEDAUTO, 0), (SGI, 0), (SGMODE, 0), (SGLIT, 0), (VULIT, 0), (KSTAB, 0), (BLSTEP, 0),
                          (GOFF, 0), (GOFF + 1, 0), (KLFW, 0), (KLFR, 6), (KLFP, 0), (KLFF, 0), (KLFL, 0), (KLFD, 0), (TREMF, 64), (FLFO, 0),
                          (LFO_OFF, 0), (LFO_V, 0), (LFO_SH, 0), (LFO_PP, 0),
                          (KARP, 0), (KARR, 6), (KARG, 1), (KARO, 1), (AN, 0), (ACUR, 0xFF), (AOFF, 0),
