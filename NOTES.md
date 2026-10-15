@@ -353,6 +353,13 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 - The factory DEVICE CHECK also runs an **ESP CHECK** (0x126C02, strings 0x160B1C): PRAM / IRAM / GRAM / ERAM of both
   DSP cores, NG / OK each. The OS was built **Sep 20 1999 11:03:14** (string right after it).
 - D-Beam = ADC 9 / 10 read through curve tables (0x127A66 -> 0x426D12 pointers); 0x12780E = raw ADC n + 9.
+- **System parameters live in flash, not on disk** (save routine around 0x122E40): a 0x6500-byte image of the flash
+  sector at 0x1F0000 is rebuilt in RAM (er6): 0x1F0000-0x1F63FF copied back as it was (unknown contents, kept), the
+  33-byte system params from RAM 0x43B3D8 at +0x6400, the tag "TS25ESYSTEMPRMxxBAK" (0x1608D0) at +0x64F0; then the
+  boot APIs 0x4005C4 (erase) / 0x4005D4 (program) write it back. Load (0x122F7C) checks the tag first.
+  **+0x6421 .. +0x64EF (207 bytes) are free**: room to make our settings (DDS patch, ROUTING, MFX, LFO / ARP / VOICE)
+  survive power-off by hooking the save after the image is built (copy our block in) and reading 0x1F6430 at boot.
+  NOT done: it writes flash, so it waits for the user's OK.
 - **LEDs: 65, driven by code** (the same codes as the keys: pads 10-1F, LOC 40-43, EFX 50-54, STATUS 60-67 = A-D x 2
   colours?, F4 / C4-C9 / 30-31 = LED-only). API: 0x132866(code) on, 0x132880(code) off, 0x13289A / 0x1328E0 /
   0x1328FC / 0x132934 / 0x132944 = blink variants (masks 0x4273B0 / 0x4273D0); state bits 0x427390 + 2 * (code >> 4),
