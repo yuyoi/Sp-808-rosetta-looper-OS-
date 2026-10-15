@@ -5,7 +5,7 @@
 > **Runs on real hardware.** Custom firmware boots on a real Roland SP-808(EX) and installs straight from a Zip or
 > ZuluIDE SD card: Roland-chan boot animation, own home menu, MPC-style pad sampling, and **KEYS: an 8-voice pitched
 > sampler running as our own program in the FX DSP**, on top of the 4 stock voices, with **DDS-DSP** oscillators
-> (saw / pulse / triangle / detuned unison) layered on every voice. See [Status](#status-2026-10-14).
+> (saw / pulse / triangle / detuned unison) layered on every voice. See [Status](#status-2026-10-15).
 
 > **Preview, work in progress (October 2026).** This is published as-is so people can see the menus, the tooling and
 > how far the reverse engineering got, and expand it if they want. KEYS and DDS-DSP (v1.81) are confirmed on a real
@@ -52,7 +52,8 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
   DETUNE in 1/16 semitones), OCT. SAMPLE 0 =
   pure synth, notes hold while the key is held. The oscillator is a raw 24-bit phase (DDS); pulse and triangle are
   shaped from it with saturation and abs, all in the same DSP instructions per voice.
-- **Built, emulator-tested, waiting for the hardware test (v1.9-v1.93):**
+- **Built and emulator-tested (v1.9-v1.97); the menus and LAB pages are confirmed on the unit (v1.95-v1.96),
+  the rest waits for the hardware test:**
   - Every text page in a **Classic Mac** style: window, pinstriped title, scrolling list, ENTER = a full-screen
     submode menu with full names.
   - **DDS-DSP** tabs: OSCILLATORS, SAMPLE ATTACK (LA: the sample's attack, then the oscillators), ENVELOPES (decay,
@@ -61,9 +62,12 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
   - **ROUTING** tile: Roland's own mixer with presets (DRY, INPUT FX, LOOP FX, MASTER FX, REC FX), the 16 FX
     locations, levels, pans, FX / AUX sends.
   - **MFX** tile: the three FX insert slots DSP0 has (Roland uses one), each placeable at 14 mix points, with knobs /
-    D-Beam / footswitch mapping. Level blocks for now; real effects need ears on the unit.
+    D-Beam / footswitch mapping. Each slot picks an effect (v1.97): **FILTER** (LP / BP / HP, cutoff, resonance),
+    **DRIVE** (gain, tone, bit / rate crush), **DELAY** (up to 1.48 s, feedback, mix; slots on DELAY share the delay
+    RAM), **MOD** (tremolo, auto-pan, ring). The knobs can drive any slot's params. Tested in the emulator, waiting
+    for ears on the unit.
   - **LAB** tile (hidden hardware): live bars of all 14 analog inputs, any button's factory name, a light show over
-    all 65 LEDs, the 184 unused bits of the 7-segment line (hidden icons?), the input meter on the pads.
+    all 65 LEDs, the 184 unused bits of the 7-segment line (checked on the unit: no hidden icons), the input meter on the pads.
   - KEYS lights the pads of the notes that sound.
 
 ## State in one look
@@ -76,7 +80,8 @@ Part of the Rosetta family, after [Rosetta ROM](https://github.com/yuyoi/Rompler
 | DDS-DSP: saw / pulse + PW / triangle / detuned unison per voice, layered with the sample (v1.81) | works on hardware |
 | looper: pad layers, overdub, undo / clear on PAD SAMPLING (v0.9b) | on the card since v1.8, **hw test pending** |
 | DDS-DSP tabs LA / ENV, Classic Mac menus, looper stopgap keys (v1.9) | emulator-tested, not on hw yet |
-| ROUTING (Roland's mixer + FX location, presets), LAB (live ADC bars, buttons, LED show), MFX (3 FX insert slots, engine, controls), held keys on the pad LEDs (v1.91) | emulator-tested, not on hw yet |
+| ROUTING (Roland's mixer + FX location, presets), LAB (live ADC bars, buttons, LED show), MFX (3 FX insert slots, engine, controls), held keys on the pad LEDs (v1.91) | emulator-tested; menus, LAB BUTTONS / LED SHOW / LCD ICONS / PAD VU and MFX slot select work on hardware (v1.96) |
+| MFX effects per slot: FILTER / DRIVE + CRUSH / DELAY / MOD (v1.97) | emulator-tested, on the card, **ear test pending** |
 | H8S disassembler / xref / assembler / emulator, ESP2 DSP decoder and simulator | work, used for all of the above |
 
 Open points for whoever picks it up:
@@ -121,11 +126,11 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
 | `tools/h8sdis.py`, `tools/xref.py`, `tools/q.py` | H8S disassembler, xref builder (`xref.py image.bin tools/xref.pkl`), "who references this address" |
 | `tools/h8asm.py` | small H8S assembler with labels (only the instructions the patches use) |
 | `tools/make_prg.py` | SP808.PRG format + header checks (first trial mod) |
-| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.91; v0.7b-e are LCD diagnostics) |
+| `tools/build_v02.py` .. `tools/build_v10.py` | each firmware version as a patch script (`build_v10.py` = current, builds v1.97; v0.7b-e are LCD diagnostics) |
 | `tools/esp.py`, `tools/dspdump.py`, `tools/fxcapture.py` | ESP2 DSP decoder / disassembler / cycle simulator; DSP programs out of the image; live FX programs captured by running the stock loader in the emulator |
 | `tools/keysdsp.py`, `tools/test_v10.py` | our DSP1 sampler program (+ model test) and the KEYS end-to-end test |
 | `tools/mixmap.py` | runs Roland's mixer API in the emulator and maps every parameter onto DSP0 words |
-| `tools/mfxdsp.py`, `tools/test_mfx.py`, `tools/test_route.py`, `tools/test_padled.py` | the MFX DSP1 program (3 insert slots) and the v1.91 tests (MFX, ROUTING / LAB, pad LEDs) |
+| `tools/mfxdsp.py`, `tools/test_mfx.py`, `tools/test_fx.py`, `tools/test_route.py`, `tools/test_padled.py` | the MFX DSP1 program (3 insert slots, 4 effects, model + self test) and its tests (MFX engine, effects through the firmware, ROUTING / LAB, pad LEDs) |
 | `tools/gfxlib.py`, `tools/ui_gfx.py` | graphics engine (framebuffer, fonts, icons, LCD packing) and the mockup renderer |
 | `tools/h8emu.py`, `tools/test_ui.py`, `tools/test_v08.py`, `tools/test_v09.py` | small H8S emulator that runs our code on the PC; screen and looper-session tests |
 | `tools/bootanim.py` | boot animation player + hook; frames from `assets/roland_chan_frames.npz` |
@@ -143,7 +148,7 @@ Note: the builds are based on the SP-808 (non-EX) OS v1.05. Installing one on an
   No Roland code or data is distributed here.
 - MIT licensed (see `LICENSE`).
 
-## Status (2026-10-14)
+## Status (2026-10-15)
 
 Confirmed on a real SP-808EX with a ZuluIDE (Zip drive emulator):
 - Disk install of a modified OS.
@@ -191,6 +196,18 @@ Built and emulator-tested, waiting for the card:
 - **v1.93:** arpeggiator (UP / DOWN / UP+DOWN / RANDOM, 60-240 BPM 1/16 steps, gate, 1-3 octaves).
 - **v1.94:** voice modes POLY / MONO (legato, last-note priority, glide) / UNISON (4 detuned voices a note).
 
+On the card:
+- **v1.95, menus confirmed on the unit 2026-10-15:** v1.94 showed blank values in every menu. The H8S ignores
+  address bit 0 on word reads, and a string table had landed on an odd address. The assembler now aligns tables at
+  layout time, and the emulator models the H8S (it reproduced the bug and logs any odd access).
+- **v1.96, LAB confirmed on the unit 2026-10-15:** BUTTONS showed nothing because Roland's key handlers ate the keys;
+  all key groups are masked while BUTTONS shows. LED SHOW lights every LED; LCD ICONS: the 7-segment line's free bits
+  drive no segments.
+- **v1.97, MFX effects (ear test pending):** each slot runs FILTER -> DRIVE + CRUSH -> MOD -> DELAY, TYPE enables one
+  block, the others are transparent. 3 params per type with their own names and units, defaults on a TYPE change,
+  only changed DSP words written. The delay RAM is split between the slots set to DELAY. Emulator: low-pass 200 Hz
+  1.08 / 4 kHz 0.02, echo at the set time, two DELAY slots split the RAM, tremolo 0.22..1.0, KEYS round trip clean.
+
 ## TODO
 
 - [x] Record / result screens in the new graphics (live level meter, timer, take waveform) - v0.8.
@@ -206,7 +223,8 @@ Built and emulator-tested, waiting for the card:
 - [x] DDS: ARP (v1.93), voice modes MONO / GLIDE / UNISON (v1.94), emulator-tested.
 - [ ] DDS next: 2-op FM + wavetable from a sample, VARI PITCH screen rebuild, patch memory (save / load DDS settings).
 - [x] ROUTING / LAB / MFX tiles (v1.91, emulator): Roland's mixer, hidden hardware pages, 3 insert slots.
-- [ ] MFX sound: real blocks per slot (filter, delay, crush, ...) with ears on the unit; pads as FX switches / scenes.
+- [x] MFX sound (v1.97, emulator): FILTER / DRIVE + CRUSH / DELAY / MOD per slot, knob-mappable.
+- [ ] MFX next: tune by ear on the unit (levels, resonance, rates), scenes.
 - [ ] Stretch: an animation page with Hex Girl dancing, an uwu face mode and adjustable glitches.
 - [ ] Looper v2: 4 loops synced to loop 1, faders A-D, ASSIGN menu (single-switch mode), per-loop FX
   (plan in `LOOPER_DESIGN.md`).
