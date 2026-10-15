@@ -20,7 +20,8 @@ def one(test, image, png):                     # child process: one test, counti
     h8emu.Emu.__init__ = rec
     sys.argv = [os.path.join(HERE, test + '.py'), image, png]
     try:
-        runpy.run_path(sys.argv[0], run_name='__main__')
+        f = runpy.run_path(sys.argv[0], run_name='run_all_child')['main']
+        f(*(image, png)[:f.__code__.co_argcount])           # some tests take only the image (test_padled, test_voice)
     finally:
         odd = sorted(set().union(*(e.odd for e in emus))) if emus else []
         print('[run_all] emus %d odd accesses %d %s' % (len(emus), len(odd), ['pc %06X @%06X' % x for x in odd[:8]]))
