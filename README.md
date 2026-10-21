@@ -1,5 +1,7 @@
 <p align="center"><img src="assets/roland_chan_boot.gif" width="560" alt="Roland-chan boot animation"></p>
 
+<p align="center"><a href="https://discord.gg/R3CQkFdRtf"><img src="https://img.shields.io/badge/Discord-join%20the%20server-5865F2?logo=discord&logoColor=white" alt="Join the Discord"></a></p>
+
 # SP-808 Rosetta Looper OS
 
 > **Runs on real hardware.** Custom firmware boots on a real Roland SP-808(EX) and installs straight from a Zip or
@@ -13,6 +15,7 @@
 > per version, long notes, no packaging. Start with [Use](#use), `NOTES.md` and `tools/build_v10.py`.
 > The disk side (takes to/from WAV, R-DAC codec, ZuluIDE tool) lives in
 > [sp-808-disk-studio](https://github.com/yuyoi/sp-808-disk-studio).
+> Questions, hardware reports and ideas: **[Discord](https://discord.gg/R3CQkFdRtf)**.
 
 Goal: turn the Roland SP-808 Groove Sampler into a **guitar looper / MPC-style sampler**. The groove/song UI comes
 out, the sampler stays, and three modes get their own buttons: **MPC** (pad sampling), **Looper** (layers, overdub,
@@ -216,7 +219,10 @@ On the card:
 
 Built, waiting for the card:
 - **v1.98:** KEYS synth only: with DDS-DSP SAMPLE 0 the KEYS page plays at once (no source pad to pick first); raising
-  SAMPLE then picks one with the next pad. The MPC and MFX pages no longer share a cursor byte.
+  SAMPLE then picks one with the next pad. The MPC and MFX pages no longer share a cursor byte. MFX gains CHORUS /
+  FLANGER / PHASER (the DSP program list-scheduled to fit). MIDI remote keys: a note on channel 16 = an SP-808 key
+  press through the OS's own key dispatcher, so the PC can drive the unit (`tools/sp808_midi.py`, with audio capture
+  for hardware-in-the-loop tests). Looper timing trace (ms per step) to find the loop-start lag.
 
 ## TODO
 
