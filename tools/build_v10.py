@@ -501,7 +501,11 @@ MPP, MDRY, MWET, MDLY, MRB, MRE = (RAM_BASE + 0x5F0, RAM_BASE + 0x5F3, RAM_BASE 
                                    RAM_BASE + 0x5F8, RAM_BASE + 0x5FA)   # p1-p3, dry, wet, delay (w), region (w, w)
 MSHAD = RAM_BASE + 0xC00                                                    # 3 x len(ENTRIES) x (coef, shift)
 MF_NENT = len(mfxdsp.ENTRIES)
-assert MSHAD + 6 * MF_NENT <= MVAL and MVAL + len(mfxdsp.VIDS) <= RAM_BASE + 0x1000, 'MFX lane RAM (0xC00-0xFFF)'
+# v1.99: MOD modes CHORUS / FLANGER / PHASER with extra rows P4-P6 (a row per real param, the Rosetta way): MPX = 3
+# per slot, ML4 = their label set (mode - 2, mfxdsp.PX_NAMES), MLM = the MODE apply saw last (a MODE change on the tab
+# loads that mode's RATE / DEPTH / P4-P6), MPPX = P4-P6 of the slot being applied
+MPX, ML4, MLM, MPPX = RAM_BASE + 0xDA0, RAM_BASE + 0xDA9, RAM_BASE + 0xDAC, RAM_BASE + 0xDAF   # 9, 3, 3, 3 bytes
+assert MSHAD + 6 * MF_NENT <= MVAL and MVAL + len(mfxdsp.VIDS) <= MPX and MPPX + 3 <= RAM_BASE + 0x1000, 'MFX lane RAM'
 # LAB BUTTONS (v1.95): the OS key groups eat most keys before the screen sees them; while BUTTONS is shown every
 # group is masked (0x427906 = FFFF), so each key comes to our screen as event 9. BTMASK = the mask before, BTON = set.
 KEYMASK = 0x427906
@@ -511,7 +515,7 @@ BTMASK, BTON = RAM_BASE + 0x504, RAM_BASE + 0x506
 LANE_RAM = dict(lead=(RAM_BASE + 0x800, RAM_BASE + 0xC00), mfx=(RAM_BASE + 0xC00, RAM_BASE + 0x1000),
                 loop=(RAM_BASE + 0x1000, RAM_BASE + 0x1800))                 # 0x1800-0x1FFF spare, FB at 0x2000
 INIT_LEAD = []                                  # (address, byte) set at power-on, lead lane (KEYS / synth)
-INIT_MFX = []                                   # MFX lane
+INIT_MFX = [(MPX + i, mfxdsp.PX_DEFAULT[i % 3]) for i in range(9)]   # MFX lane (v1.99: P4-P6 per slot)
 INIT_LOOP = []                                  # Looper v2 lane
 STRS_LEAD = []                                  # (label, text): lead lane
 STRS_MFX = []                                   # MFX lane
@@ -526,19 +530,21 @@ MF_CODE_NAMES = ['OFF', 'SEND/RETURN', 'TR.A PRE-EQ', 'TR.A POST-EQ', 'TR.B PRE-
 MF_C2I = [15, 0, 6, 7, 8, 9, 10, 11, 12, 13, 4, 5, 1, 2, 3]       # mixer code -> stock FX LOCATION index
 MF_SRC = [('KNOB A', 6), ('KNOB B', 7), ('KNOB C', 8), ('BEAM L', 9), ('BEAM R', 10), ('FOOT SW', 11)]   # (name, ADC)
 MF_TGTS = ['OFF', 'SLOT 1 LEVEL', 'SLOT 2 LEVEL', 'SLOT 3 LEVEL'] + ['SLOT %d P%d' % (k + 1, j + 1)
-                                                                  for k in range(3) for j in range(3)]
+                                                                  for k in range(3) for j in range(3)] + \
+          ['SLOT %d P%d' % (k + 1, n + 4) for k in range(3) for n in range(3)]   # v1.99: 13-21 = MPX[3 k + n]
 MF_PNAMES = [('-', '-', '-'), ('MODE', 'CUTOFF', 'RESONANCE'), ('GAIN', 'TONE', 'CRUSH'), ('TIME', 'FEEDBACK', 'MIX'),
-             ('MODE', 'RATE', 'DEPTH'), ('RATE', 'DEPTH', 'MIX'), ('RATE', 'DEPTH', 'FEEDBACK'),
-             ('RATE', 'DEPTH', 'RESO')]                              # per TYPE (mfxdsp.TYPES order)
+             ('MODE', 'RATE', 'DEPTH')]                              # per TYPE (mfxdsp.TYPES order)
 MF_PDISP = [(('n',), ('n',), ('n',)), (('s', 'mf_fm', 3), ('t', 'mf_hz', 'HZ'), ('n',)),
             (('t', 'mf_db', 'DB'), ('n',), ('s', 'mf_cr', 7)), (('t', 'mf_ms', 'MS'), ('n',), ('n',)),
-            (('s', 'mf_mm', 3), ('n',), ('n',))] + [(('n',), ('n',), ('n',))] * 3
+            (('s', 'mf_mm', len(mfxdsp.MOD_MODES)), ('n',), ('n',))]
 MF_NT = mfxdsp.NTYPES
 assert len(MF_PNAMES) == len(MF_PDISP) == MF_NT
 def mf_slot_tab(k):
     return ('SLOT %d' % (k + 1), [('TYPE', MTYPE + k, 0, MF_NT - 1, 'mfx_type%d' % k, ('s', 'mf_ty', MF_NT))] +
             [(('dyn', MTYPE + k, [MF_PNAMES[t][j] for t in range(MF_NT)]), MP + 3 * k + j, 0, 127, 'mfx_par%d' % k,
-              ('dyn', MTYPE + k, [MF_PDISP[t][j] for t in range(MF_NT)])) for j in range(3)])
+              ('dyn', MTYPE + k, [MF_PDISP[t][j] for t in range(MF_NT)])) for j in range(3)] +
+            [(('dyn', ML4 + k, mfxdsp.PX_NAMES[n]), MPX + 3 * k + n, 0, 127, 'mfx_par%d' % k, ('n',))
+             for n in range(mfxdsp.NPX)])                       # v1.99: P4-P6, labels by MOD mode
 MFX_TABS = [
     ('FX CHAIN', [('ENGINE', MON, 0, 1, 'mfx_onoff', ('s', 'mf_offon', 2))] +
                  [x for k in range(3) for x in (('SLOT %d AT' % (k + 1), MSLOT + k, 0, 14, 'mfx_route', ('s', 'mf_codes', 15)),
@@ -3316,6 +3322,7 @@ def build():
         a.mov_b_from_abs(MSLOT + k, 'r1l'); a.mov_b_imm(0, 'r1h'); a.mov_w_imm(k, 8); a.mov_w_imm(7, 0); a.jsr(MIXER_PARAM)
     a.label('mfr_x'); a.rts()
     a.label('mfx_levels')                                       # every slot -> its program words
+    a.bsr16('mfx_msync')                                        # (v1.99: a knob may have changed a MOD MODE)
     for k in range(3): set_byte(MAPS, k); a.bsr16('mfx_apply')
     a.rts()
     for k in range(3):                                          # row hooks: which slot
@@ -3333,6 +3340,9 @@ def build():
     def mf_put(reg, name): a.mov_b_st_disp(reg, VI[name], 6)    # MVAL[name] = reg (er6 = MVAL)
     def mf_slotp(base, out):                                    # er1 = base + MAPS (byte table per slot)
         a.mov_b_from_abs(MAPS, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(base, 1); a.add_l_rr(0, 1)
+    def mf_slot3(base):                                         # er1 = base + 3 MAPS (3 bytes per slot)
+        a.mov_b_from_abs(MAPS, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
+        a.extu_w(0); a.extu_l(0); a.mov_l_imm(base, 1); a.add_l_rr(0, 1)
     a.label('mfx_type')                                         # TYPE changed: its default params, delay RAM split
     a.push_l(2); a.push_l(3)
     mf_slotp(MTYPE, 1); a.mov_b_ld(1, 'r2l')                                       # r2l = type
@@ -3341,6 +3351,8 @@ def build():
     a.mov_b_rr('r2l', 'r0l'); a.mov_b_rr('r0l', 'r2h'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r2h', 'r0l')
     a.extu_w(0); a.extu_l(0); a.mov_l_imm('mf_pdef', 3); a.add_l_rr(0, 3)          # er3 = defaults of the type
     for j in range(3): a.mov_b_ld_disp(j, 3, 'r0l'); a.mov_b_st_disp('r0l', j, 1)
+    mf_slot3(MPX)                                                                   # v1.99: P4-P6 defaults
+    for n_ in range(3): a.mov_b_imm(mfxdsp.PX_DEFAULT[n_], 'r0l'); a.mov_b_st_disp('r0l', n_, 1)
     a.pop_l(3); a.pop_l(2)
     a.bsr16('mfx_mask')
     a.mov_b_from_abs(MREGM, 'r1l'); a.cmp_b_rr('r0l', 'r1l'); a.beq16('mfx_apply')
@@ -3353,9 +3365,19 @@ def build():
     for k in range(3):
         nx_ = uniq('mfm'); a.mov_b_from_abs(MTYPE + k, 'r1l'); a.cmp_b_imm(mfxdsp.T_DELAY, 'r1l'); a.bne(nx_)
         a.or_b_imm(1 << k, 'r0l'); a.label(nx_)
+        nx_ = uniq('mfm'); a.cmp_b_imm(mfxdsp.T_MOD, 'r1l'); a.bne(nx_)            # MOD CHORUS / FLANGER
+        a.mov_b_from_abs(MP + 3 * k, 'r1l')
         for t_ in mfxdsp.MODDLY:
-            nx_ = uniq('mfm'); a.cmp_b_imm(t_, 'r1l'); a.bne(nx_); a.or_b_imm(8 << k, 'r0l'); a.label(nx_)
+            n2_ = uniq('mfm'); a.cmp_b_imm(t_ - 2, 'r1l'); a.bne(n2_); a.or_b_imm(8 << k, 'r0l'); a.label(n2_)
+        a.label(nx_)
     a.rts()
+    a.label('mfx_msync')                                        # r0l = 1 when the delay-RAM split changed
+    a.bsr16('mfx_mask'); a.mov_b_from_abs(MREGM, 'r1l'); a.cmp_b_rr('r0l', 'r1l'); a.beq('mfa_sn')
+    a.mov_b_to_abs('r0l', MREGM)
+    a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfa_sy')
+    a.bsr16('mfx_eram_ew')                                      # new WRITE bases
+    a.label('mfa_sy'); a.mov_b_imm(1, 'r0l'); a.rts()
+    a.label('mfa_sn'); a.mov_b_imm(0, 'r0l'); a.rts()
     a.label('mfx_par')                                          # a param changed: clamp to its TYPE's range, apply
     a.push_l(2); a.push_l(3)
     mf_slotp(MTYPE, 1); a.mov_b_ld(1, 'r2l')
@@ -3368,7 +3390,20 @@ def build():
         a.mov_b_ld_disp(j, 3, 'r2l'); a.mov_b_ld_disp(j, 1, 'r0l'); a.cmp_b_rr('r2l', 'r0l'); a.bls(ok_)
         a.mov_b_st_disp('r2l', j, 1)
         a.label(ok_)
+    mf_slotp(MTYPE, 1); a.mov_b_ld(1, 'r0l'); a.cmp_b_imm(mfxdsp.T_MOD, 'r0l'); a.bne16('mfa_pmx')   # MOD: MODE changed?
+    mf_slotp(MLM, 1); a.mov_b_ld(1, 'r2h')
+    a.mov_b_from_abs(MAPS, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
+    a.extu_w(0); a.extu_l(0); a.mov_l_imm(MP, 3); a.add_l_rr(0, 3); a.mov_b_ld(3, 'r2l')   # er3 = MP + 3 s, r2l = MODE
+    a.cmp_b_rr('r2h', 'r2l'); a.beq16('mfa_pmx')
+    a.mov_b_rr('r2l', 'r0l'); a.mov_b_imm(5, 'r1l'); a.mulxu_b('r1l', 0)            # 5 bytes per mode
+    a.extu_l(0); a.mov_l_imm('mf_mdef', 1); a.add_l_rr(0, 1); a.mov_l_rr(1, 2)      # er2 = (RATE, DEPTH, P4-P6)
+    a.mov_b_ld(2, 'r0l'); a.mov_b_st_disp('r0l', 1, 3)
+    a.mov_b_ld_disp(1, 2, 'r0l'); a.mov_b_st_disp('r0l', 2, 3)
+    mf_slot3(MPX)
+    for n_ in range(3): a.mov_b_ld_disp(2 + n_, 2, 'r0l'); a.mov_b_st_disp('r0l', n_, 1)
+    a.label('mfa_pmx')
     a.pop_l(3); a.pop_l(2)
+    a.bsr16('mfx_msync'); a.cmp_b_imm(0, 'r0l'); a.bne16('mfx_levels')            # split changed: every slot
     a.label('mfx_apply')                                        # slot MAPS -> values -> the words that changed
     a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfa_go'); a.rts()
     a.label('mfa_go')
@@ -3387,6 +3422,19 @@ def build():
     a.mov_b_from_abs(MAPS, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
     a.extu_w(0); a.extu_l(0); a.mov_l_imm(MP, 1); a.add_l_rr(0, 1)
     for j in range(3): a.mov_b_ld_disp(j, 1, 'r0l'); a.mov_b_to_abs('r0l', MPP + j)   # p1-p3
+    mf_slot3(MPX)                                                                  # v1.99: P4-P6
+    for n_ in range(3): a.mov_b_ld_disp(n_, 1, 'r0l'); a.mov_b_to_abs('r0l', MPPX + n_)
+    mf_slotp(MLM, 1); a.mov_b_from_abs(MPP, 'r0l'); a.mov_b_st('r0l', 1)           # the MODE seen
+    a.mov_b_imm(0, 'r2l')
+    mf_slotp(MTYPE, 1); a.mov_b_ld(1, 'r0l'); a.cmp_b_imm(mfxdsp.T_MOD, 'r0l'); a.bne('mfa_l4')
+    a.mov_b_from_abs(MPP, 'r0l'); a.cmp_b_imm(3, 'r0l'); a.bcs('mfa_l4'); a.add_b_imm(-2 & 0xFF, 'r0l'); a.mov_b_rr('r0l', 'r2l')
+    a.label('mfa_l4'); mf_slotp(ML4, 1); a.mov_b_st('r2l', 1)                      # rows P4-P6: their label set
+    a.mov_b_from_abs(MEFT, 'r0l'); a.cmp_b_imm(mfxdsp.T_MOD, 'r0l'); a.bne('mfa_ne')   # MOD 3-5 = mfxdsp.eff_type:
+    a.mov_b_from_abs(MPP, 'r0l'); a.cmp_b_imm(3, 'r0l'); a.bcs('mfa_ne')           #  (RATE, DEPTH, P4) as p1-p3
+    a.add_b_imm(mfxdsp.T_CHORUS - 3, 'r0l'); a.mov_b_to_abs('r0l', MEFT)
+    for j in range(2): a.mov_b_from_abs(MPP + j + 1, 'r0l'); a.mov_b_to_abs('r0l', MPP + j)
+    a.mov_b_from_abs(MPPX, 'r0l'); a.mov_b_to_abs('r0l', MPP + 2)                  # P5 / P6 stay in MPPX + 1 / 2
+    a.label('mfa_ne')
     a.mov_b_from_abs(MREGM, 'r0l'); a.mov_b_rr('r0l', 'r1l'); a.add_b_rr('r0l', 'r0l'); a.add_b_rr('r1l', 'r0l')
     a.mov_b_from_abs(MAPS, 'r1l'); a.add_b_rr('r1l', 'r0l'); a.extu_w(0); a.shll_w(0); a.shll_w(0)
     a.extu_l(0); a.mov_l_imm('mf_regt', 3); a.add_l_rr(0, 3)                       # region (base, end) words
@@ -3444,21 +3492,37 @@ def build():
     mf_lfo_p1(); mf_depth()
     a.mov_w_imm(M_.CH_CENTER, 0); a.mov_w_to_abs(0, MDLY)
     mf_ptr('mf_mix', MPP + 2, 2); a.mov_b_ld(3, 'r0l'); a.mov_b_to_abs('r0l', MDRY)
-    a.mov_b_ld_disp(1, 3, 'r0l'); a.mov_b_to_abs('r0l', MWET); a.bra16('mfa_com')
+    a.mov_b_ld_disp(1, 3, 'r0l'); a.mov_b_to_abs('r0l', MWET)
+    mf_ptr('mf_fb', MPPX + 1, 1); a.mov_b_ld(3, 'r0l'); mf_put('r0l', 'EFB'); a.bra16('mfa_com')   # P5 FEEDBACK
     a.label('mfa_fla')
     mf_lfo_p1(); mf_depth()
-    mf_ptr('mf_fld', MPP + 1, 2); a.mov_w_ld(3, 0); a.mov_w_to_abs(0, MDLY)       # 4 + depth samples
+    mf_ptr('mf_fld', MPP + 1, 2); a.mov_w_ld(3, 4)                                 # r4 = 6 + depth samples
+    mf_ptr('mf_fman', MPPX + 1, 2); a.mov_w_ld(3, 0); a.add_w_rr(4, 0); a.mov_w_to_abs(0, MDLY)   # + P5 MANUAL
     mf_ptr('mf_fb', MPP + 2, 1); a.mov_b_ld(3, 'r0l'); mf_put('r0l', 'EFB')
-    set_byte(MDRY, M_.FL_MIX[0]); set_byte(MWET, M_.FL_MIX[1]); a.bra16('mfa_com')
+    mf_ptr('mf_fmix', MPPX + 2, 2); a.mov_b_ld(3, 'r0l'); a.mov_b_to_abs('r0l', MDRY)   # P6 MIX
+    a.mov_b_ld_disp(1, 3, 'r0l'); a.mov_b_to_abs('r0l', MWET); a.bra16('mfa_com')
     a.label('mfa_pha')
     mf_lfo_p1()
-    mf_ptr('mf_phf', MPP + 1, 2)
-    for j, nm_ in enumerate(('FSH', 'FSL')): a.mov_b_ld_disp(j, 3, 'r0l'); mf_put('r0l', nm_)
+    mf_ptr('mf_phm', MPPX + 1, 2); a.mov_w_ld(3, 5)                                # r5 = f (P5 MANUAL, x 2^14)
+    a.mov_w_rr(5, 0); a.shll_w(0); mf_put('r0h', 'FH')
+    a.mov_w_rr(5, 0); a.and_b_imm(0x7F, 'r0l'); mf_put('r0l', 'FL')
+    mf_ptr('mf_phg', MPP + 1, 2); a.mov_w_ld(3, 1)                                 # span = f * G(DEPTH) / 16
+    a.mov_w_rr(5, 0); a.mulxu_w(1, 0); a.shlr_l2(0); a.shlr_l2(0)
+    a.extu_l(5); a.mov_l_imm(M_.PH_FCAP, 1); a.sub_l(5, 1)                         # <= cap - f
+    a.cmp_l_rr(1, 0); a.bls('mfa_pc'); a.mov_l_rr(1, 0)
+    a.label('mfa_pc')
+    a.mov_w_rr(0, 1); a.shll_w(1); mf_put('r1h', 'FSH'); a.and_b_imm(0x7F, 'r0l'); mf_put('r0l', 'FSL')
     mf_ptr('mf_phq', MPP + 2, 3)
     for j, nm_ in enumerate(('QH', 'QL', 'WB')): a.mov_b_ld_disp(j, 3, 'r0l'); mf_put('r0l', nm_)
-    mf_put('r0l', 'WBR')
-    for nm_, v_ in (('FH', M_.PH_FB[0]), ('FL', M_.PH_FB[1]), ('XIL', 32), ('XIR', 32), ('SR', 0), ('SF', 64),
-                    ('FDRY', 64), ('WBS', M_.SH5), ('FDRYR', 32), ('XDRY', 32), ('DDRY', 0), ('DDX', 64), ('DDRYR', 64)):
+    a.not_b('r0l'); a.inc_b('r0l'); a.mov_b_rr('r0l', 'r4l')                       # r4l = -wb (64 q)
+    mf_ptr('mf_phw', MPPX + 2, 1); a.mov_b_ld(3, 'r4h')                            # r4h = w (P6 MIX)
+    a.mov_b_rr('r4h', 'r0l'); mf_put('r0l', 'FDRYR')
+    a.mov_b_imm(64, 'r0l'); a.sub_b_rr('r4h', 'r0l'); mf_put('r0l', 'XDRY')
+    a.mov_b_rr('r4h', 'r0l'); a.mulxu_b('r4l', 0)                                  # r0 = 64 q w
+    for _ in range(6): a.shlr_w(0)
+    a.not_b('r0l'); a.inc_b('r0l'); mf_put('r0l', 'WBR')
+    for nm_, v_ in (('XIL', 32), ('XIR', 32), ('SR', 0), ('SF', 64), ('FDRY', 64), ('WBS', M_.SH5), ('WBSR', M_.SH5),
+                    ('DDRY', 0), ('DDX', 64), ('DDRYR', 64)):
         a.mov_b_imm(v_ & 0xFF, 'r0l'); mf_put('r0l', nm_)
     a.bra16('mfa_com')
     a.label('mfa_dly')
@@ -3578,7 +3642,13 @@ def build():
         a.mov_b_to_abs('r0l', MCLAST + i)
         for t in range(1, 4):                                                    # SLOT t LEVEL
             nt = uniq('mft'); a.cmp_b_imm(t, 'r1l'); a.bne(nt); a.mov_b_to_abs('r0l', MLVL + t - 1); a.label(nt)
-        np_ = uniq('mfp'); a.cmp_b_imm(4, 'r1l'); a.bcs(np_); a.bsr16('mfx_pscale'); a.label(np_)   # SLOT k P j
+        np_, p4_ = uniq('mfp'), uniq('mf4')
+        a.cmp_b_imm(4, 'r1l'); a.bcs(np_); a.cmp_b_imm(13, 'r1l'); a.bcc(p4_)
+        a.bsr16('mfx_pscale'); a.bra16(np_)                                      # SLOT k P j
+        a.label(p4_)
+        for i_ in range(9):                                                      # SLOT k P4-P6 (0..127 as is)
+            n4_ = uniq('mf4'); a.cmp_b_imm(13 + i_, 'r1l'); a.bne(n4_); a.mov_b_to_abs('r0l', MPX + i_); a.label(n4_)
+        a.label(np_)
         a.mov_b_imm(1, 'r2h')
         a.label(nx)
     a.cmp_b_imm(0, 'r2h'); a.beq('mfc_x')
@@ -4230,7 +4300,6 @@ def build():
     a.label('mf_fb'); a.raw(bytes(M_.TAB_FB))
     a.label('mf_mix'); a.raw(bytes(x for m in M_.TAB_MIX for x in m))
     a.label('mf_dep'); a.raw(bytes(x & 0xFF for d in M_.TAB_DEP for x in (d >> 7, d & 0x7F, (-d) >> 7, (-d) & 0x7F)))
-    a.label('mf_phf'); a.raw(bytes(x & 0xFF for hl in M_.TAB_PHF for x in hl))
     a.label('mf_phq'); a.raw(bytes(x & 0xFF for q in M_.TAB_PHQ for x in q)); a.align2()
     a.label('mf_fld'); a.raw(struct.pack('>128H', *[M_.FL_MIN + (d >> 3) for d in M_.TAB_DEP]))
     a.label('mf_vdef'); a.raw(bytes(M_.VDEF[n] & 0xFF for n in M_.VIDS))
@@ -4238,6 +4307,12 @@ def build():
     for n_, v_, sh_ in M_.ENTRIES:
         w_ = MFX_PARAMS['m0_%s' % n_][1]
         a.raw(bytes((M_.VI[v_], 0xFF if sh_ is None else M_.VI[sh_], (MFX_PROG[w_] >> 8) & 3)))
+    a.label('mf_mdef'); a.raw(bytes(x for d in M_.MODE_DEFAULT for x in d))   # MOD MODE -> (RATE, DEPTH, P4-P6)
+    a.label('mf_fmix'); a.raw(bytes(x for m in M_.TAB_FMIX for x in m))
+    a.label('mf_phw'); a.raw(bytes(M_.TAB_PHW)); a.align2()
+    a.label('mf_fman'); a.raw(struct.pack('>128H', *M_.TAB_FMAN))
+    a.label('mf_phm'); a.raw(struct.pack('>128H', *M_.TAB_PHM))
+    a.label('mf_phg'); a.raw(struct.pack('>128H', *M_.TAB_PHG))
     a.label('mf_pdef'); a.raw(bytes(x for t in range(M_.NTYPES) for x in M_.P_DEFAULT[t]))
     a.label('mf_pmax'); a.raw(bytes(x for t in range(M_.NTYPES) for x in M_.P_MAX[t])); a.align2()
     a.label('mf_padm'); a.dc_l('s_mfp0'); a.dc_l('s_mfp1')
