@@ -86,7 +86,7 @@ class Midi:
         ch = 15 if code < 0x80 else 14
         if down: self.send(0x90 | ch, code & 0x7F, 96 if shift else 32)
         else: self.send(0x80 | ch, code & 0x7F, 0)
-    def close(self): wm.midiOutReset(self.h); wm.midiOutClose(self.h)
+    def close(self): wm.midiOutClose(self.h)      # no midiOutReset: its note-offs on ch 15/16 = key releases
 
 
 class Rec:                                            # waveIn, polled (CALLBACK_NULL), 16-bit stereo
