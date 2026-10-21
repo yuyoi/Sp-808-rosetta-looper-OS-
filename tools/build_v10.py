@@ -227,7 +227,7 @@ from make_prg import check, SIZE, VER_HDR, VER_CODE
 import bootanim
 import gfxlib
 
-VERSION, VER_TXT = 1198, '1.98'              # 1.98 = KEYS synth only (SAMPLE 0 plays at once), MPC / MFX cursors split; 1.97 = MFX effects: FILTER / DRIVE+CRUSH / DELAY / MOD per slot; 1.96 BUTTONS
+VERSION, VER_TXT = 1199, '1.99'              # 1.99 = Rosetta menu style (D-70 / HR-GP5), CHORUS / FLANGER / PHASER as MOD modes + rows P4-P6; 1.98 = KEYS synth only (SAMPLE 0 plays at once), MPC / MFX cursors split; 1.97 = MFX effects: FILTER / DRIVE+CRUSH / DELAY / MOD per slot; 1.96 BUTTONS
 LOCK_BYTE = 0x42790E                        # bit 1: sampling lock (go-to-screen refused while set)
 LP_FRAME_MS = 250                           # LOOP page refresh
 # looper
