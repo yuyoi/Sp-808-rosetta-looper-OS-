@@ -565,6 +565,16 @@ RKR, RKW = LANE_RAM['lead'][0] + 1, LANE_RAM['lead'][0] + 2                # rin
 RKQ = LANE_RAM['lead'][0] + 0x10                                         # 8 raw key words
 GETKEY, GETKEY_CALL = 0x1311C6, 0x13F2FC                                  # stock: next key (0 = none); its call site
 INIT_LEAD += [(RKR, 0), (RKW, 0)]
+# v1.99 MIDI talk-back (hardware-in-the-loop): CCs on channel 16 set registers, CC 30 runs a command in the main loop,
+# the reply goes out of MIDI OUT as SysEx F0 7D 08 <cmd> ... F7 (data bytes as two nibbles each):
+#   CC 20-23 = address bits 27-21 / 20-14 / 13-7 / 6-0, CC 24-25 = length bits 13-7 / 6-0, CC 26 / 27 = poke value
+#   bits 6-0 / 7. CC 30: 1 = PEEK (0x100000 <= a, a + len <= 0x800000, len <= 2048: flash, RAM, the LCD image),
+#   2 = POKE one byte (our RAM 0x43C000-0x43DFFF only), 3 = PING (replies the version).
+RM_REG = LANE_RAM['lead'][0] + 0x20                                     # 8 x 7-bit registers (CC 20-27)
+RM_CMD = LANE_RAM['lead'][0] + 0x28                                     # pending command (CC 30), 0 = none
+STOCK_M_CC, MIDI_CC_SLOT = 0x134F7A, MIDI_TABLE + 12                    # stock control-change handler, its slot
+SCI0_SSR, SCI0_TDR = 0xFFFF7C, 0xFFFF7B                                 # MIDI out (as the stock THRU echo 0x1356D2)
+INIT_LEAD += [(RM_CMD, 0)] + [(RM_REG + i, 0) for i in range(8)]
 STRS_LEAD += [('s_ksynth', 'SYNTH ONLY'), ('s_vtag', 'V' + VER_TXT)]   # v1.99: menu status
 KSTAB = RAM_BASE + 0x45C
 KSET_TABS = [('KEYS SOUND', [('RELEASE', KREL, 0, len(REL_MS) - 1, None, ('t', 'rel_ms', 'MS')),
@@ -2333,6 +2343,55 @@ def build():
     a.mov_b_from_abs(MWR, 'r0l'); a.add_b_imm(1, 'r0l'); a.and_b_imm(15, 'r0l'); a.mov_b_to_abs('r0l', MWR)
     a.pop_l(2)
     a.label('m_out'); a.rts()
+    # ---- v1.99 MIDI talk-back: channel 16 CCs = registers / command (stock CC handler for every other channel) ----
+    a.label('m_cc_tr')                         # r0l = channel, controller @MIDI_NOTE, value @MIDI_VEL
+    a.cmp_b_imm(15, 'r0l'); a.beq('rmc_16'); a.jmp(STOCK_M_CC)
+    a.label('rmc_16'); a.push_l(1)
+    a.mov_b_from_abs(MIDI_NOTE, 'r1l'); a.mov_b_from_abs(MIDI_VEL, 'r1h')
+    a.cmp_b_imm(30, 'r1l'); a.bne('rmc_reg'); a.mov_b_to_abs('r1h', RM_CMD); a.bra('rmc_x')   # run it in the main loop
+    a.label('rmc_reg'); a.add_b_imm((-20) & 0xFF, 'r1l'); a.cmp_b_imm(8, 'r1l'); a.bcc('rmc_x')   # CC 20-27
+    a.mov_b_rr('r1l', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_imm(RM_REG, 0); a.mov_b_st('r1h', 0)
+    a.label('rmc_x'); a.pop_l(1); a.rts()
+    a.label('rm_tx')                           # r0l -> MIDI OUT (wait TDRE, write TDR, clear TDRE: as the stock THRU)
+    a.btst_abs(7, SCI0_SSR); a.beq('rm_tx'); a.mov_b_to_abs('r0l', SCI0_TDR); a.bclr_abs(7, SCI0_SSR); a.rts()
+    a.label('rm_hex')                          # r0l -> two nibbles (high first); keeps er0
+    a.push_l(0); a.mov_b_rr('r0l', 'r0h')
+    for _ in range(4): a.shlr_b('r0l')
+    a.bsr16('rm_tx'); a.mov_b_rr('r0h', 'r0l'); a.and_b_imm(15, 'r0l'); a.bsr16('rm_tx'); a.pop_l(0); a.rts()
+    def rm_send(*bs):
+        for b_ in bs: a.mov_b_imm(b_, 'r0l'); a.bsr16('rm_tx')
+    a.label('rm_exec')                         # main loop (rk_getkey): run RM_CMD, reply, clear it; keeps er1-er3
+    a.push_l(1); a.push_l(2); a.push_l(3)
+    a.mov_b_from_abs(RM_CMD, 'r3h'); a.mov_b_imm(0, 'r0l'); a.mov_b_to_abs('r0l', RM_CMD)
+    a.mov_l_imm(0, 2)                          # er2 = address from CC 20-23, er1 = length from CC 24-25
+    for i in range(4):
+        if i: a.shll_l2(2); a.shll_l2(2); a.shll_l2(2); a.shll_l(2)            # << 7
+        a.mov_b_from_abs(RM_REG + i, 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 2)
+    a.mov_b_from_abs(RM_REG + 4, 'r1l'); a.mov_b_imm(0, 'r1h'); a.shll_w(1)
+    for _ in range(6): a.shll_w(1)
+    a.mov_b_from_abs(RM_REG + 5, 'r0l'); a.extu_w(0); a.add_w_rr(0, 1); a.extu_l(1)
+    a.cmp_b_imm(3, 'r3h'); a.beq16('rme_ping'); a.cmp_b_imm(1, 'r3h'); a.beq16('rme_peek'); a.cmp_b_imm(2, 'r3h'); a.beq16('rme_poke')
+    a.label('rme_err'); rm_send(0xF0, 0x7D, 0x08, 0x7F, 0xF7); a.bra16('rme_x')
+    a.label('rme_ping'); rm_send(0xF0, 0x7D, 0x08, 0x03)
+    a.mov_b_imm(VERSION >> 8, 'r0l'); a.bsr16('rm_hex'); a.mov_b_imm(VERSION & 0xFF, 'r0l'); a.bsr16('rm_hex')
+    rm_send(0xF7); a.bra16('rme_x')
+    a.label('rme_peek')
+    a.cmp_l_imm(0x100000, 2); a.bcs16('rme_err')                                      # below the flash image
+    a.mov_l_rr(1, 0); a.add_l_imm(-1 & 0xFFFFFFFF, 0); a.cmp_l_imm(2048, 0); a.bcc16('rme_err')   # len 1..2048
+    a.mov_l_rr(2, 0); a.add_l_rr(1, 0); a.cmp_l_imm(0x800001, 0); a.bcc16('rme_err')   # end within flash + RAM
+    rm_send(0xF0, 0x7D, 0x08, 0x01)
+    for i in range(6): a.mov_b_from_abs(RM_REG + i, 'r0l'); a.bsr16('rm_tx')           # echo address + length
+    a.label('rme_pl'); a.mov_b_ldinc(2, 'r0l'); a.bsr16('rm_hex'); a.dec_w1(1); a.bne('rme_pl')
+    rm_send(0xF7); a.bra16('rme_x')
+    a.label('rme_poke')
+    a.cmp_l_imm(RAM_BASE, 2); a.bcs16('rme_err'); a.cmp_l_imm(RAM_BASE + 0x2000, 2); a.bcc16('rme_err')   # our RAM only
+    a.mov_b_from_abs(RM_REG + 6, 'r0l'); a.mov_b_from_abs(RM_REG + 7, 'r0h'); a.and_b_imm(1, 'r0h')
+    for _ in range(7): a.shll_b('r0h')
+    a.or_b_rr('r0h', 'r0l'); a.mov_b_st('r0l', 2)
+    rm_send(0xF0, 0x7D, 0x08, 0x02)
+    for i in range(4): a.mov_b_from_abs(RM_REG + i, 'r0l'); a.bsr16('rm_tx')
+    a.mov_b_ld(2, 'r0l'); a.bsr16('rm_hex'); rm_send(0xF7)
+    a.label('rme_x'); a.pop_l(3); a.pop_l(2); a.pop_l(1); a.rts()
     a.label('rk_on'); a.push_l(1)                                                   # r0l = 14 / 15 (MIDI ch 15 / 16)
     a.mov_b_from_abs(MIDI_VEL, 'r1h'); a.cmp_b_imm(0, 'r1h'); a.beq('rk_rel')       # velocity 0 = note-off
     a.cmp_b_imm(64, 'r1h'); a.bcs('rk_pl'); a.mov_b_imm(0x01, 'r1h'); a.bra('rk_code')   # 64+: SHIFT (0x100)
@@ -2348,6 +2407,8 @@ def build():
     a.mov_b_to_abs('r0h', RKW)
     a.label('rk_full'); a.pop_l(2); a.pop_l(1); a.rts()
     a.label('rk_getkey')                       # the dispatcher's "next key": a remote key first, else the key scanner
+    a.mov_b_from_abs(RM_CMD, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('rkg_k'); a.bsr16('rm_exec')   # v1.99 talk-back
+    a.label('rkg_k')
     a.mov_b_from_abs(RKR, 'r0l'); a.mov_b_from_abs(RKW, 'r0h'); a.cmp_b_rr('r0h', 'r0l'); a.bne('rkg_one')
     a.jmp(GETKEY)
     a.label('rkg_one'); a.push_l(1)
@@ -4417,6 +4478,9 @@ def main(raw, outdir):
     o = MIDI_TABLE - 0x100000                   # MIDI note-off / note-on handlers -> our trampolines
     assert struct.unpack('>II', img[o:o + 8]) == (STOCK_M_OFF, STOCK_M_ON), 'MIDI handler table'
     img[o:o + 8] = struct.pack('>II', labels['m_off_tr'], labels['m_on_tr'])
+    o = MIDI_CC_SLOT - 0x100000                 # v1.99: control change -> m_cc_tr (channel 16 = talk-back)
+    assert struct.unpack('>I', img[o:o + 4])[0] == STOCK_M_CC, 'MIDI CC slot'
+    img[o:o + 4] = struct.pack('>I', labels['m_cc_tr'])
     o = GETKEY_CALL - 0x100000                  # v1.98 remote keys: the dispatcher asks rk_getkey first
     assert bytes(img[o:o + 4]) == bytes([0x5E]) + GETKEY.to_bytes(3, 'big'), 'key dispatcher call site'
     img[o:o + 4] = bytes([0x5E]) + labels['rk_getkey'].to_bytes(3, 'big')

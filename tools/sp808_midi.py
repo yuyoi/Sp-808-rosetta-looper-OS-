@@ -17,7 +17,7 @@ usage:
            --audio SUBSTR (default "focusrite"), --rate 48000
 keys: PAD1-PAD16, PADSMPL, PADBANK, UP, DOWN, LEFT, RIGHT, ENTER, EXIT, SONG, SYSTEM, SAMPLE, LOC1-LOC4, or 0xNN.
 """
-import ctypes, json, struct, sys, time, wave
+import ctypes, json, os, struct, sys, time, wave
 from ctypes import wintypes as W
 
 KEYS = dict(PADSMPL=0x22, PADBANK=0x20, UP=0x70, DOWN=0x71, LEFT=0x72, RIGHT=0x73, EXIT=0xB0, ENTER=0xB1,
@@ -122,6 +122,91 @@ class Rec:                                            # waveIn, polled (CALLBACK
             w.setnchannels(2); w.setsampwidth(2); w.setframerate(self.rate); w.writeframes(bytes(self.data))
 
 
+class MIDIHDR(ctypes.Structure):
+    _fields_ = [('lpData', ctypes.c_void_p), ('dwBufferLength', W.DWORD), ('dwBytesRecorded', W.DWORD),
+                ('dwUser', ctypes.c_size_t), ('dwFlags', W.DWORD), ('lpNext', ctypes.c_void_p),
+                ('reserved', ctypes.c_size_t), ('dwOffset', W.DWORD), ('dwReserved', ctypes.c_size_t * 8)]
+
+
+def midi_ins():
+    out = []
+    for i in range(wm.midiInGetNumDevs()):
+        c = MIDIOUTCAPS(); wm.midiInGetDevCapsW(i, ctypes.byref(c), ctypes.sizeof(c)); out.append(c.szPname)
+    return out
+
+
+class MidiIn:                                         # SysEx only, polled buffers (CALLBACK_NULL)
+    def __init__(self, sub):
+        names = midi_ins(); self.idx = pick(names, sub, ('focusrite', 'scarlett'))
+        self.name, self.h = names[self.idx], W.HANDLE()
+        r = wm.midiInOpen(ctypes.byref(self.h), self.idx, 0, 0, 0)
+        if r: sys.exit('midiInOpen(%s) failed: %d (port in use?)' % (self.name, r))
+        self.bufs, self.hdrs, self.acc = [], [], bytearray()
+        for _ in range(8):
+            b = ctypes.create_string_buffer(4096)
+            h = MIDIHDR(ctypes.addressof(b), 4096, 0, 0, 0, None, 0, 0)
+            wm.midiInPrepareHeader(self.h, ctypes.byref(h), ctypes.sizeof(h)); wm.midiInAddBuffer(self.h, ctypes.byref(h), ctypes.sizeof(h))
+            self.bufs.append(b); self.hdrs.append(h)
+        wm.midiInStart(self.h)
+    def poll(self):                                   # -> complete SysEx messages received so far
+        msgs = []
+        for h in self.hdrs:
+            if h.dwFlags & 1:                         # MHDR_DONE
+                self.acc += ctypes.string_at(h.lpData, h.dwBytesRecorded)
+                h.dwFlags &= ~1; h.dwBytesRecorded = 0
+                wm.midiInAddBuffer(self.h, ctypes.byref(h), ctypes.sizeof(h))
+        while 0xF7 in self.acc:
+            i = self.acc.index(0xF7); m = bytes(self.acc[:i + 1]); del self.acc[:i + 1]
+            if 0xF0 in m: msgs.append(m[m.index(0xF0):])
+        return msgs
+    def close(self):
+        wm.midiInStop(self.h); wm.midiInReset(self.h)
+        for h in self.hdrs: wm.midiInUnprepareHeader(self.h, ctypes.byref(h), ctypes.sizeof(h))
+        wm.midiInClose(self.h)
+
+
+class Talk:                                           # v1.99 talk-back: ch 16 CCs out, SysEx F0 7D 08 .. F7 back
+    def __init__(self, midi, min_):
+        self.o, self.i = midi, min_
+    def cmd(self, c, addr=0, n=0, val=0, timeout=3.0):
+        for i, s in enumerate((21, 14, 7, 0)): self.o.send(0xBF, 20 + i, (addr >> s) & 0x7F)
+        for k, v in ((24, (n >> 7) & 0x7F), (25, n & 0x7F), (26, val & 0x7F), (27, val >> 7)): self.o.send(0xBF, k, v)
+        self.i.poll(); self.o.send(0xBF, 30, c)
+        end = time.time() + timeout
+        while time.time() < end:
+            for m in self.i.poll():
+                if m[1:3] == b'\x7D\x08': return m
+            time.sleep(0.01)
+        return None
+    @staticmethod
+    def nib(bs): return bytes(bs[i] << 4 | bs[i + 1] for i in range(0, len(bs) - 1, 2))
+    def ping(self):
+        m = self.cmd(3); return struct.unpack('>H', self.nib(m[4:8]))[0] if m and m[3] == 3 else None
+    def peek(self, addr, n):
+        out = bytearray()
+        while n > 0:                                  # 2048 bytes per request (~130 ms at 31250 baud per 1 KB data)
+            k = min(n, 2048); m = self.cmd(1, addr, k, timeout=2 + k / 1000)
+            if not m or m[3] != 1: raise RuntimeError('peek %06X: %s' % (addr, m.hex() if m else 'no reply (MIDI OUT cable? v1.99?)'))
+            out += self.nib(m[10:-1]); addr += k; n -= k
+        return bytes(out)
+    def poke(self, addr, v):
+        m = self.cmd(2, addr, 0, v); return m and m[3] == 2
+    def screen(self, path=None):                      # LCD image 0x40187A: 34 rows x 24 bytes, 6 px/byte (bit 5 left)
+        raw = self.peek(0x40187A, 34 * 24)
+        rows = [[(raw[24 * y + i] >> (5 - b)) & 1 for i in range(24) for b in range(6)][4:132] for y in range(2, 34)]
+        if path:
+            from PIL import Image
+            im = Image.new('RGB', (128 * 4, 32 * 4), (170, 190, 120))
+            px = im.load()
+            for y, r in enumerate(rows):
+                for x, v in enumerate(r):
+                    if v:
+                        for dy in range(4):
+                            for dx in range(3): px[4 * x + dx, 4 * y + dy] = (30, 40, 30)
+            im.save(path)
+        return rows
+
+
 def code_of(name):
     shift = name.upper().startswith('SHIFT+')
     n = name[6:] if shift else name
@@ -175,6 +260,22 @@ def main():
                 rec.stop(recp); json.dump(dict(rate=rate, device=rec.name, midi=midi.name, events=log),
                                           open(recp.rsplit('.', 1)[0] + '.json', 'w'), indent=1)
             for x in log: print(x)
+        elif a[0] in ('ping', 'peek', 'poke', 'screen', 'state'):   # v1.99 talk-back (needs SP-808 MIDI OUT -> PC)
+            mi = MidiIn(opt('--midi-in') or msub); print('MIDI <-', mi.name)
+            try:
+                t = Talk(midi, mi)
+                if a[0] == 'ping': print('version', t.ping())
+                elif a[0] == 'peek': print(t.peek(int(a[1], 16), int(a[2])).hex(' '))
+                elif a[0] == 'poke': print('ok' if t.poke(int(a[1], 16), int(a[2], 0)) else 'refused / no reply')
+                elif a[0] == 'screen':
+                    rows = t.screen(a[1] if len(a) > 1 else None)
+                    for r in rows: print(''.join('#' if v else '.' for v in r))
+                else:                                 # named RAM variables, addresses from the firmware build script
+                    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import build_v10 as bm
+                    for nm in (a[1:] or ['PAGE', 'CUR', 'KSTATE', 'LSTATE', 'MON', 'MTAB', 'MFCUR', 'KDTOP', 'KNOSMP']):
+                        v = getattr(bm, nm); print('%-8s @%06X = %02X' % (nm, v, t.peek(v, 1)[0]))
+            finally:
+                mi.close()
         else: sys.exit(__doc__)
     finally:
         midi.close()
