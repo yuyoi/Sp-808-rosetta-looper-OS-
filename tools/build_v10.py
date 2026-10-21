@@ -559,7 +559,7 @@ RKR, RKW = LANE_RAM['lead'][0] + 1, LANE_RAM['lead'][0] + 2                # rin
 RKQ = LANE_RAM['lead'][0] + 0x10                                         # 8 raw key words
 GETKEY, GETKEY_CALL = 0x1311C6, 0x13F2FC                                  # stock: next key (0 = none); its call site
 INIT_LEAD += [(RKR, 0), (RKW, 0)]
-STRS_LEAD += [('s_ksynth', 'SYNTH ONLY')]
+STRS_LEAD += [('s_ksynth', 'SYNTH ONLY'), ('s_vtag', 'V' + VER_TXT)]   # v1.99: menu status
 KSTAB = RAM_BASE + 0x45C
 KSET_TABS = [('KEYS SOUND', [('RELEASE', KREL, 0, len(REL_MS) - 1, None, ('t', 'rel_ms', 'MS')),
                              ('THRU', KTHRU, 0, 1, 'kse_thru', ('s', 'mf_offon', 2)),
@@ -1221,18 +1221,16 @@ def build():
             row_num_word(disp[1], var); row_put(disp[2]); a.bra16(end)
             a.label(off); row_put('OFF')
             a.label(end)
-    def scroll_bar(table, n):                               # track + thumb (y from table[KDTOP])
-        D.fill(124, 9, 1, 22)
+    def scroll_bar(table, n):                               # boxed track + thumb (y from table[KDTOP])
+        D.frame(123, 8, 5, 24)
         a.mov_b_from_abs(KDTOP, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(table, 1); a.add_l_rr(0, 1)
-        a.mov_b_ld(1, 'r1h'); a.mov_b_imm(123, 'r1l'); a.mov_b_imm(3, 'r2l'); a.mov_b_imm(sb_thumb(n), 'r2h')
+        a.mov_b_ld(1, 'r1h'); a.mov_b_imm(124, 'r1l'); a.mov_b_imm(3, 'r2l'); a.mov_b_imm(sb_thumb(n), 'r2h')
         a.bsr16('gfx_fill')
-    def mac_window(title, nchars):                          # frame, pinstriped title bar, close box, title
-        D.frame(0, 0, 128, 32)
-        for y in (2, 4, 6): D.fill(2, y, 124, 1)
-        D.fill(4, 1, 7, 7, gfxlib.M_CLR); D.frame(5, 2, 5, 5)
-        w = 4 * nchars + 5; x0 = (128 - w) // 2
-        D.fill(x0, 1, w, 7, gfxlib.M_CLR); D.text(x0 + 3, 2, title, 'font_tiny')
-        D.fill(0, 8, 128, 1)
+    def mac_window(title, nchars, status=None, nstat=0):    # v1.99 Rosetta style (D-70 / HR-GP5): black title tab
+        w = 4 * nchars + 3                                  # left, a rule along the top row, status text right
+        D.text(2, 1, title, 'font_tiny'); D.fill(0, 0, w, 7, gfxlib.M_INV)
+        D.fill(w, 6, 128 - w, 1)
+        if status: D.text(128 - 4 * nstat, 1, status, 'font_tiny')
     def set_top(cur, n):                                    # KDTOP = first row shown (cursor kept in the middle)
         z, ok = uniq('dtz'), uniq('dto')
         a.mov_b_from_abs(cur, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq(z); a.add_b_imm(0xFF, 'r0l')
@@ -1243,18 +1241,18 @@ def build():
     def row_y(i, skip):                                     # row i visible? KDY = its y, else -> skip
         a.mov_b_from_abs(KDTOP, 'r0l'); a.mov_b_imm(i, 'r1l'); a.sub_b_rr('r0l', 'r1l')
         a.cmp_b_imm(3, 'r1l'); a.bcc16(skip)
-        a.mov_b_rr('r1l', 'r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.sub_b_rr('r1l', 'r0l')
-        a.add_b_imm(10, 'r0l'); a.mov_b_to_abs('r0l', KDY)
+        a.mov_b_rr('r1l', 'r0l'); a.shll_b('r0l'); a.shll_b('r0l'); a.shll_b('r0l')   # rows 8 px apart from y 9
+        a.add_b_imm(9, 'r0l'); a.mov_b_to_abs('r0l', KDY)
     for P_ in MAC_PAGES:
         pid, tabs, TAB, CURV = P_['pid'], P_['tabs'], P_['tab'], P_['cur']
         a.label('d_' + pid)
         a.mov_b_from_abs(KDMENU, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16(pid + '_dpage')
-        mac_window('s_%snm' % pid, len(P_['name']))       # ---- submode menu (full screen)
+        mac_window('s_%snm' % pid, len(P_['name']), 's_vtag', len('V' + VER_TXT))   # ---- submode menu
         set_top(KDMSEL, len(tabs))
         for ti in range(len(tabs)):
             sk = uniq('dms')
             row_y(ti, sk)
-            a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_%sd%d' % (pid, ti), 'font_tiny')   # full name
+            a.mov_b_imm(2, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_%sd%d' % (pid, ti), 'font_tiny')   # full name
             a.mov_b_imm(118, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_gt', 'font_tiny')   # enterable: arrow
             a.mov_b_from_abs(KDMSEL, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(sk)
             a.bsr16('dd_rinv')
@@ -1266,7 +1264,7 @@ def build():
             nt = uniq('ddn')
             nit = len(items)
             a.mov_b_from_abs(TAB, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(nt)
-            mac_window('s_%st%d' % (pid, ti), len(P_['name'] + ': ' + desc))
+            mac_window('s_%sd%d' % (pid, ti), len(desc), 's_%snm' % pid, len(P_['name']))   # tab = submode, page right
             if isinstance(items, str):
                 a.bsr16(items + '_d'); a.bra16('d_flush'); a.label(nt); continue
             set_top(CURV, nit)
@@ -1278,12 +1276,12 @@ def build():
                     for t_ in range(len(lbl[2])):
                         nx_ = uniq('dln')
                         a.mov_b_from_abs(lbl[1], 'r0l'); a.cmp_b_imm(t_, 'r0l'); a.bne16(nx_)
-                        a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h')
+                        a.mov_b_imm(2, 'r1l'); a.mov_b_from_abs(KDY, 'r1h')
                         D.text_at_r1('s_%si%d_%d_%d' % (pid, ti, i, t_), 'font_tiny'); a.bra16(le_)
                         a.label(nx_)
                     a.label(le_)
                 else:
-                    a.mov_b_imm(4, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_%si%d_%d' % (pid, ti, i), 'font_tiny')
+                    a.mov_b_imm(2, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1('s_%si%d_%d' % (pid, ti, i), 'font_tiny')
                 a.mov_l_imm(KROW, 1); dshow(var, disp); a.mov_b_imm(0, 'r0l'); a.mov_b_st('r0l', 1)
                 a.bsr16('dd_rval')
                 a.mov_b_from_abs(CURV, 'r0l'); a.cmp_b_imm(i, 'r0l'); a.bne16(sk)
@@ -1300,7 +1298,7 @@ def build():
     a.mov_b_from_abs(KDY, 'r1h'); D.text_at_r1(KROW, 'font_tiny'); a.rts()
     a.label('dd_rinv')                                      # selection bar on row KDY
     D.mode(gfxlib.M_INV)
-    a.mov_b_imm(2, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); a.add_b_imm(0xFF, 'r1h'); a.mov_b_imm(121, 'r2l'); a.mov_b_imm(7, 'r2h')
+    a.mov_b_imm(0, 'r1l'); a.mov_b_from_abs(KDY, 'r1h'); a.add_b_imm(0xFF, 'r1h'); a.mov_b_imm(122, 'r2l'); a.mov_b_imm(7, 'r2h')
     a.bsr16('gfx_fill'); D.mode(gfxlib.M_SET); a.rts()
 
     a.label('d_flush')
