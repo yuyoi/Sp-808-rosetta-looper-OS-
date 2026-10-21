@@ -272,6 +272,19 @@ Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note f
   pad hit still picks a source.
 
 #### Lane MFX: effect modes and sound
+- **2026-10-21: CHORUS / FLANGER / PHASER moved into MOD** (user on v1.98: "those can be in the mod tab"; "add as
+  many rows as you need, scrolling is fine"; old TYPEs removed; the Rosetta rule: a row per real param, nothing
+  hard-wired). MODE = TREMOLO AUTO-PAN RING CHORUS FLANGER PHASER, rows RATE / DEPTH + P4-P6, labels by mode (ML4):
+  CHORUS MIX / FEEDBACK / -, FLANGER FEEDBACK / MANUAL / MIX, PHASER RESO / MANUAL / MIX (user's picks). All
+  host values, DSP unchanged: chorus FEEDBACK = efb, flanger MANUAL = + 0..10 ms (squared) on the centre, flanger MIX
+  = TAB_MIX x 44/64, phaser MANUAL = sweep bottom 50 Hz..1.5 kHz with span = f * G(DEPTH) / 16 capped at 4 kHz
+  (mulxu.w in mfa_pha; the v1.98 span table was for a fixed 150 Hz), phaser MIX = ap2 share w: R = x (64-w) +
+  ap2 w, WBR = -(64q w >> 6) at SH5. Mode defaults reproduce v1.98 (phaser MANUAL 41 = 150 Hz, MIX 64 = 50/50).
+  mfx_apply remaps MOD 3-5 to effective types 5-7 with (RATE, DEPTH, P4) as p1-p3 and P5 / P6 in MPPX + 1 / 2, as
+  mfxdsp.values / eff_type. A MODE change on the tab loads (RATE, DEPTH, P4-P6) from mf_mdef (MLM = MODE seen last).
+  The delay-RAM split depends on the MODE: mfx_msync (mfx_par and mfx_levels, so knobs too) re-splits on a MREGM
+  change. CONTROLS + SLOT k P4-P6 (targets 13-21, 0..127 as is). RAM MPX / ML4 / MLM / MPPX at 0xDA0-0xDB1 (lane
+  block). Gotcha: a `for n in ...` inside build() shadows uniq's counter `n` (TypeError in uniq): use n_.
 - **2026-10-15: CHORUS / FLANGER / PHASER as own TYPEs (5-7)** (user chose: own TYPEs, stereo chorus/flanger, 2-notch
   mono phaser). Emulator-tested, NOT on hw.
   - **Scheduler (mfxdsp.Seq/schedule):** the old one-after-another placement left 216 nops in 581 words. Now the words

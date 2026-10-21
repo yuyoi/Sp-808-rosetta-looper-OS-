@@ -114,7 +114,7 @@ def main(image_path, out):
     sim.key(bm.K_DOWN); [sim.key(bm.K_RIGHT) for _ in range(4)]   # KNOB B -> target 4 = SLOT 1 P1
     e.wb(bm.ADC_TAB + 6, 200); e.wb(bm.ADC_TAB + 7, 255); sim.run(40)
     print('KNOBS      targets', bm.MF_TGTS[e.rb(bm.MCTRL)], '/', bm.MF_TGTS[e.rb(bm.MCTRL + 1)], '-> params', params(0),
-          '(expect P2 100, P1 2 = RING) words', check(0))
+          '(expect P2 100, P1 5 = PHASER: MODE has 6 entries since v1.99) words', check(0))
     shots.append(('CONTROLS', sim.shot()))
     # ---- KEYS takes DSP1: our groups cleared; back: everything again ----
     sim.key(bm.K_EXIT); sim.run(5)

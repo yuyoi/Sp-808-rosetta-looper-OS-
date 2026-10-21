@@ -36,10 +36,15 @@ G0, END = 0x3C, 0x2F1                                  # ours: 0x3C .. 0x2F0 (th
 SLOT_IO = [None, (0xD1, 0xD3, 0x64, 0x6C), (0xD5, 0xD7, 0x66, 0x6E)]   # GRAM in L, in R, out L, out R (slots 1, 2)
 NSLOTS = 3
 FS = 44100
-TYPES = ['OFF', 'FILTER', 'DRIVE', 'DELAY', 'MOD', 'CHORUS', 'FLANGER', 'PHASER']
-T_OFF, T_FILTER, T_DRIVE, T_DELAY, T_MOD, T_CHORUS, T_FLANGER, T_PHASER = range(8)
+TYPES = ['OFF', 'FILTER', 'DRIVE', 'DELAY', 'MOD']
+T_OFF, T_FILTER, T_DRIVE, T_DELAY, T_MOD = range(5)
 NTYPES = len(TYPES)
-MODDLY = (T_CHORUS, T_FLANGER)                         # TYPEs that use the slot's delay line with an LFO offset
+# v1.99: CHORUS / FLANGER / PHASER are MOD modes 3-5 (user: "those can be in the mod tab"), with extra rows P4-P6
+# (the Rosetta way: a row per real param, scrolling). Inside the model they stay effective types 5-7 with params
+# (RATE, DEPTH, P4) + the extras P5 / P6.
+T_CHORUS, T_FLANGER, T_PHASER = 5, 6, 7
+MODDLY = (T_CHORUS, T_FLANGER)                         # effective types that use the slot's delay line + LFO offset
+def eff_type(typ, p1): return T_CHORUS + p1 - 3 if typ == T_MOD and p1 >= 3 else typ
 CRUSH_BASE = [[8 + 80 * (2 * s + ch) for ch in (0, 1)] for s in range(NSLOTS)]   # multiples of 8, < 512
 DELAY_LO, DELAY_HI = 512, 65520                        # READvar offsets the delay lines may use
 FC, FD, FE, FF = 0xFC, 0xFD, 0xFE, 0xFF                # where eramrd lands (i[F0 | p])
@@ -372,7 +377,11 @@ def filter_q(qv):
 
 
 FLT_MODES = ['LP', 'BP', 'HP']
-MOD_MODES = ['TREMOLO', 'AUTO-PAN', 'RING']
+MOD_MODES = ['TREMOLO', 'AUTO-PAN', 'RING', 'CHORUS', 'FLANGER', 'PHASER']
+NPX = 3                                                # extra MOD rows P4-P6
+PX_NAMES = [['-', 'MIX', 'FEEDBACK', 'RESO'],          # row label per (mode - 2) (0 = TREMOLO / AUTO-PAN / RING)
+            ['-', 'FEEDBACK', 'MANUAL', 'MANUAL'],
+            ['-', '-', 'MIX', 'MIX']]
 CRUSH_NAMES = ['OFF', '22K', '11K', '5.5K', '2.8K', '1.4K', '690']
 def cutoff_hz(v): return 40.0 * (6500.0 / 40.0) ** (v / 127.0)          # CUTOFF 0..127: 40 Hz .. 6.5 kHz
 def reso_q(v): return 1.4 - 1.3 * (v / 127.0) ** 0.7                     # RESONANCE 0..127: q 1.4 .. 0.1
@@ -414,14 +423,21 @@ def hilo(x):
     """x (in units of 1/128) -> (hi, lo7) for a coefficient + dmac pair: x = hi + lo / 128, lo 0..127."""
     t = int(round(x * 128)); return t >> 7, t & 0x7F
 TAB_DEP = [int(round(depth_samples(v) * 8)) for v in range(128)]        # depth * 8 (the offset term is 16 c samples)
-TAB_PHF = [hilo((2 * math.sin(math.pi * ph_fmax(v) / FS) - 2 * math.sin(math.pi * PH_FMIN / FS)) * 128)
-           for v in range(128)]                                          # (span hi, lo): f = fmin + span u^2
-PH_FB = filter_f(PH_FMIN)
 TAB_PHQ = [filter_q(ph_q(v)) + (max(-128, -int(round(64 * ph_q(v)))),) for v in range(128)]   # (q hi, q lo, wb)
 P_MAX = {T_OFF: (127, 127, 127), T_FILTER: (2, 127, 127), T_DRIVE: (127, 127, 6), T_DELAY: (127, 127, 127),
-         T_MOD: (2, 127, 127), T_CHORUS: (127, 127, 127), T_FLANGER: (127, 127, 127), T_PHASER: (127, 127, 127)}
-P_DEFAULT = {T_OFF: (0, 0, 0), T_FILTER: (0, 64, 30), T_DRIVE: (60, 100, 0), T_DELAY: (80, 40, 40), T_MOD: (0, 80, 100),
-             T_CHORUS: (40, 70, 64), T_FLANGER: (30, 90, 80), T_PHASER: (45, 100, 40)}
+         T_MOD: (len(MOD_MODES) - 1, 127, 127)}
+P_DEFAULT = {T_OFF: (0, 0, 0), T_FILTER: (0, 64, 30), T_DRIVE: (60, 100, 0), T_DELAY: (80, 40, 40), T_MOD: (0, 80, 100)}
+PX_DEFAULT = (0, 0, 0)
+MODE_DEFAULT = [(80, 100, 0, 0, 0)] * 3 + [(40, 70, 64, 0, 0), (30, 90, 80, 0, 64), (45, 100, 40, 41, 64)]
+# MODE change loads (RATE, DEPTH, P4, P5, P6); flanger MANUAL 0 / MIX 64 and phaser MANUAL 41 (150 Hz) / MIX 64 are
+# the v1.98 fixed values
+TAB_FMAN = [int(round((v / 127.0) ** 2 * 0.010 * FS)) for v in range(128)]        # flanger MANUAL: + 0 .. 10 ms
+TAB_FMIX = [(int(round(d * 44 / 64.0)), int(round(w * 44 / 64.0))) for d, w in TAB_MIX]   # flanger MIX (64 = 44/44)
+def ph_fmin(v): return 50.0 * 30.0 ** (v / 127.0)                         # phaser MANUAL: 50 Hz .. 1.5 kHz
+TAB_PHM = [int(round(2 * math.sin(math.pi * ph_fmin(v) / FS) * 16384)) for v in range(128)]   # f * 2^14
+TAB_PHG = [int(round(16 * 19 * v / 127.0)) for v in range(128)]           # DEPTH: span = f * G / 16 (top ~ 20 f)
+PH_FCAP = int(round(2 * math.sin(math.pi * 4000.0 / FS) * 16384))          # sweep top <= 4 kHz (SVF stable)
+TAB_PHW = [int(round(v * 64 / 127.0)) for v in range(128)]                # phaser MIX: allpass share, 64 = all
 VIDS = ['FH', 'FL', 'QH', 'QL', 'WL', 'WB', 'WH', 'FDRY', 'G1C', 'G1S', 'G2C', 'G2S', 'T', 'TN', 'DDRY', 'DWET',
         'KINC', 'KC', 'KS', 'MRA', 'MRB', 'MRC', 'ML0', 'ML1', 'MR0', 'MR1', 'ETB', 'ETC', 'EFB', 'OD', 'OW',
         'FSH', 'FSL', 'XIL', 'XIR', 'SR', 'SF', 'XDRY', 'DDX', 'FDRYR', 'WBR', 'WBS', 'WBSR', 'DDRYR',
@@ -447,8 +463,13 @@ ENTRIES += [('kinc', 'KINC', None), ('mra', 'MRA', None), ('mrb', 'MRB', None), 
             ('ddx', 'DDX', None), ('cdh', 'CDH', None), ('cdl', 'CDL', None), ('crh', 'CRH', None), ('crl', 'CRL', None), ('etd', 'ETD', None)]
 
 
-def values(typ, p1, p2, p3, level=64, region=(DELAY_LO, DELAY_HI)):
-    """the value vector (VIDS order) as the firmware computes it."""
+def values(typ, p1, p2, p3, level=64, region=(DELAY_LO, DELAY_HI), px=None):
+    """the value vector (VIDS order) as the firmware computes it. px = (P4, P5, P6) of a MOD slot; for an effective
+    type 5-7 called directly (model tests) p1-p3 = (RATE, DEPTH, P4) and P5 / P6 default to the mode's."""
+    if typ == T_MOD and p1 >= 3:
+        m = p1; px = px or PX_DEFAULT; typ, p1, p2, p3 = eff_type(typ, p1), p2, p3, px[0]; e5, e6 = px[1], px[2]
+    elif typ in (T_CHORUS, T_FLANGER, T_PHASER):
+        e5, e6 = (px or MODE_DEFAULT[typ - 2][2:])[1:3]
     v = dict(VDEF)
     if typ == T_FILTER:
         v['FH'], v['FL'] = TAB_CUT[p2]; v['QH'], v['QL'] = TAB_Q[p3]; v['FDRY'] = v['FDRYR'] = 0
@@ -472,16 +493,18 @@ def values(typ, p1, p2, p3, level=64, region=(DELAY_LO, DELAY_HI)):
         d = max(2, min(TAB_DTIME[p1], end - base - 2)); v['EFB'] = TAB_FB[p2]; dry, wet = TAB_MIX[p3]
     elif typ in MODDLY:
         dep = TAB_DEP[p2]                                              # depth * 8 samples
-        if typ == T_CHORUS: d = CH_CENTER; dry, wet = TAB_MIX[p3]
-        else: d = FL_MIN + (dep >> 3); dry, wet = FL_MIX; v['EFB'] = TAB_FB[p3]
+        if typ == T_CHORUS: d = CH_CENTER; dry, wet = TAB_MIX[p3]; v['EFB'] = TAB_FB[e5]
+        else: d = FL_MIN + TAB_FMAN[e5] + (dep >> 3); dry, wet = TAB_FMIX[e6]; v['EFB'] = TAB_FB[p3]
         v['CDH'], v['CDL'] = dep >> 7, dep & 0x7F
         v['CRH'], v['CRL'] = (-dep) >> 7, (-dep) & 0x7F
     elif typ == T_PHASER:
-        v['FH'], v['FL'] = PH_FB; v['FSH'], v['FSL'] = TAB_PHF[p2]
+        f = TAB_PHM[e5]; span = min((f * TAB_PHG[p2]) >> 4, PH_FCAP - f)    # MANUAL, DEPTH (15-bit f units)
+        v['FH'], v['FL'], v['FSH'], v['FSL'] = f >> 7, f & 0x7F, span >> 7, span & 0x7F
         v['QH'], v['QL'], wb = TAB_PHQ[p3]
+        w = TAB_PHW[e6]                                                      # MIX: ap2 share (64 = all, 32 = v1.98)
         v['XIL'] = v['XIR'] = 32; v['SR'], v['SF'] = 0, 64                   # (L+R)/2 -> ap1 (L SVF) -> ap2 (R SVF)
         v['FDRY'], v['WB'], v['WBS'] = 64, wb, SH5                           # ap1 = x - 2q bp
-        v['FDRYR'], v['WBR'], v['XDRY'] = 32, wb, 32                         # R = (x + ap1 - 2q bp) / 2
+        v['FDRYR'], v['WBR'], v['WBSR'], v['XDRY'] = w, -((-wb * w) >> 6), SH5, 64 - w   # R = x (1-m) + ap2 m
         v['DDRY'], v['DDX'], v['DDRYR'] = 0, 64, 64                          # L = R
     half = (base + d) >> 1
     v['ETB'] = -(half >> 9); v['ETC'] = -((half & 0x1FF) >> 3); v['ETD'] = -8 * (half & 7)
@@ -489,9 +512,9 @@ def values(typ, p1, p2, p3, level=64, region=(DELAY_LO, DELAY_HI)):
     return [v[n] for n in VIDS]
 
 
-def coefs(s, typ, p1, p2, p3, level=64, region=(DELAY_LO, DELAY_HI)):
+def coefs(s, typ, p1, p2, p3, level=64, region=(DELAY_LO, DELAY_HI), px=None):
     """{param name: (coef byte, shift selector or None)} for slot s (the firmware's result)."""
-    vals = values(typ, p1, p2, p3, level, region)
+    vals = values(typ, p1, p2, p3, level, region, px)
     return {'m%d_%s' % (s, n): (vals[VI[vid]] & 0xFF, None if sid is None else vals[VI[sid]])
             for n, vid, sid in ENTRIES}
 
@@ -505,7 +528,7 @@ def eram_groups(s, region=(DELAY_LO, DELAY_HI)):
 
 
 def regmask(types):
-    """MREGM: bit s = slot s is DELAY, bit 3 + s = slot s is CHORUS / FLANGER."""
+    """MREGM from effective types (eff_type): bit s = slot s is DELAY, bit 3 + s = CHORUS / FLANGER."""
     return sum(1 << s for s in range(NSLOTS) if types[s] == T_DELAY) + \
         sum(8 << s for s in range(NSLOTS) if types[s] in MODDLY)
 
@@ -539,10 +562,10 @@ def make_sim(prog):
 
 
 # ---------------------------------------------------------------- model test
-def apply(core, prog, params, s, typ, p1=0, p2=0, p3=0, level=64, region=None):
-    if region is None: region = regions([typ if t == s else T_OFF for t in range(NSLOTS)])[s]
+def apply(core, prog, params, s, typ, p1=0, p2=0, p3=0, level=64, region=None, px=None):
+    if region is None: region = regions([eff_type(typ, p1) if t == s else T_OFF for t in range(NSLOTS)])[s]
     import keysdsp
-    for n, (c, sh) in coefs(s, typ, p1, p2, p3, level, region).items():
+    for n, (c, sh) in coefs(s, typ, p1, p2, p3, level, region, px).items():
         keysdsp.set_coef(core.prog, params[n][1], c, sh)
     for n, mode, off in eram_groups(s, region): keysdsp.set_eram(core.prog, params[n][1], mode, off)
 
@@ -651,12 +674,15 @@ def selftest(verbose=True):
             run(core, eram, s, lambda i: (0, 0), 50)
             fs_ = [62, 150, 362, 1000] if dep == 0 else [150, 1250, 3000]
             g = [(f, pk(run(core, eram, s, sine(f), 2400), 0, 1400)) for f in fs_]
-            rep.append(('slot %d PHASER %s (%.0f Hz), reso 0: gain by Hz' % (s, nm, PH_FMIN if dep == 0 else ph_fmax(dep)), g))
+            rep.append(('slot %d PHASER %s (MANUAL 41, DEPTH %d), reso 0: gain by Hz' % (s, nm, dep), g))
     apply(core, prog, params, 0, T_PHASER, 60, 127, 127)
     res = run(core, eram, 0, sine(700), 20000)
     rep.append(('PHASER running %.1f Hz, 700 Hz tone: level min / max (L, R equal?)' % lfo_hz(60, False),
                 round(min(max(abs(o[0]) for o in res[i:i + 200]) for i in range(2000, 19800, 200)) / A, 2),
                 round(max(abs(o[0]) for o in res[2000:]) / A, 2), all(o[0] == o[1] for o in res)))
+    for m, t in ((3, T_CHORUS), (4, T_FLANGER), (5, T_PHASER)):
+        rep.append(('MOD mode %s = effective type %d' % (MOD_MODES[m], t),
+                    values(T_MOD, m, 33, 77, 50, px=(99, 20, 90)) == values(t, 33, 77, 99, 50, px=(99, 20, 90))))
     if verbose:
         print('program end %03X (limit %03X)' % (max(w for k, (kind, w) in params.items()) + 1, END))
         for r in rep: print('  ', *r)
