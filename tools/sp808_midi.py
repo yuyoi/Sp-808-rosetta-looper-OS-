@@ -122,6 +122,41 @@ class Rec:                                            # waveIn, polled (CALLBACK
             w.setnchannels(2); w.setsampwidth(2); w.setframerate(self.rate); w.writeframes(bytes(self.data))
 
 
+class WAVEOUTCAPS(ctypes.Structure):
+    _fields_ = [('wMid', W.WORD), ('wPid', W.WORD), ('vDriverVersion', W.UINT), ('szPname', W.WCHAR * 32),
+                ('dwFormats', W.DWORD), ('wChannels', W.WORD), ('wReserved1', W.WORD), ('dwSupport', W.DWORD)]
+
+
+def wave_outs():
+    out = []
+    for i in range(wm.waveOutGetNumDevs()):
+        c = WAVEOUTCAPS(); wm.waveOutGetDevCapsW(i, ctypes.byref(c), ctypes.sizeof(c)); out.append(c.szPname)
+    return out
+
+
+class Play:                                           # test tones out of an interface output (non-blocking)
+    def __init__(self, sub, rate=48000):
+        names = wave_outs(); self.idx = pick(names, sub, ('focusrite', 'scarlett'))
+        self.name, self.rate, self.h, self.live = names[self.idx], rate, W.HANDLE(), []
+        f = WAVEFORMATEX(1, 2, rate, rate * 4, 4, 16, 0)
+        r = wm.waveOutOpen(ctypes.byref(self.h), self.idx, ctypes.byref(f), 0, 0, 0)
+        if r: sys.exit('waveOutOpen(%s) failed: %d' % (self.name, r))
+    def tone(self, hz, ms, level=0.3, side='LR'):     # sine; hz 0 = a 1 ms click (for lag measurements)
+        import math
+        n = int(self.rate * ms / 1000); a = int(32767 * level); fr = bytearray()
+        for i in range(n):
+            v = (a if i < self.rate // 1000 else 0) if hz == 0 else int(a * math.sin(2 * math.pi * hz * i / self.rate))
+            fr += struct.pack('<hh', v if 'L' in side else 0, v if 'R' in side else 0)
+        b = ctypes.create_string_buffer(bytes(fr), len(fr))
+        h = WAVEHDR(ctypes.addressof(b), len(fr), 0, 0, 0, 0, None, 0)
+        wm.waveOutPrepareHeader(self.h, ctypes.byref(h), ctypes.sizeof(h)); wm.waveOutWrite(self.h, ctypes.byref(h), ctypes.sizeof(h))
+        self.live.append((b, h))
+    def close(self):
+        while any(not (h.dwFlags & 1) for _, h in self.live): time.sleep(0.01)   # WHDR_DONE
+        for _, h in self.live: wm.waveOutUnprepareHeader(self.h, ctypes.byref(h), ctypes.sizeof(h))
+        wm.waveOutClose(self.h)
+
+
 class MIDIHDR(ctypes.Structure):
     _fields_ = [('lpData', ctypes.c_void_p), ('dwBufferLength', W.DWORD), ('dwBytesRecorded', W.DWORD),
                 ('dwUser', ctypes.c_size_t), ('dwFlags', W.DWORD), ('lpNext', ctypes.c_void_p),
@@ -215,7 +250,7 @@ def code_of(name):
     return c, shift
 
 
-def run(steps, midi, rec=None, tail=0):
+def run(steps, midi, rec=None, tail=0, play=None):
     log, t0 = [], time.perf_counter()
     def wait(ms):
         end = time.perf_counter() + ms / 1000
@@ -228,6 +263,9 @@ def run(steps, midi, rec=None, tail=0):
     for st in [s.strip() for s in steps.replace('\n', ';').split(';') if s.strip()]:
         w = st.split()
         if w[0].lower() == 'wait': wait(float(w[1])); continue
+        if w[0].lower() in ('tone', 'click'):           # tone HZ MS [L|R|LR] / click: needs --play
+            hz, ms = (0, 50) if w[0].lower() == 'click' else (float(w[1]), float(w[2]))
+            play.tone(hz, ms, side=(w[3] if len(w) > 3 else 'LR').upper()); ev(w[0].lower(), st); continue
         if w[0].lower() in ('down', 'up'):
             c, sh = code_of(w[1]); midi.key(c, w[0].lower() == 'down', sh); ev(w[0].lower(), w[1], c); continue
         c, sh = code_of(w[0]); hold = float(w[1]) if len(w) > 1 else 120
@@ -244,6 +282,7 @@ def main():
         if flag: a.pop(i); return True
         v = a[i + 1]; del a[i:i + 2]; return v
     msub, asub, rate = opt('--midi'), opt('--audio'), int(opt('--rate', 48000))
+    psub = opt('--play')
     recp, tail, hold, shift = opt('--rec'), float(opt('--tail', 2000)), opt('--hold', '120'), opt('--shift', flag=True)
     if not a or a[0] == 'ports':
         print('MIDI out:', *['  %d: %s' % x for x in enumerate(midi_outs())], sep='\n')
@@ -254,8 +293,10 @@ def main():
             print(run(('SHIFT+' if shift else '') + a[1] + ' ' + hold, midi))
         elif a[0] == 'run':
             rec = Rec(asub, rate) if recp else None
+            play = Play(psub, rate) if psub else None
             if rec: print('recording', rec.name, rate, 'Hz ->', recp); time.sleep(0.3)
-            log = run(a[1], midi, rec, tail if rec else 0)
+            log = run(a[1], midi, rec, tail if rec else 0, play)
+            if play: play.close()
             if rec:
                 rec.stop(recp); json.dump(dict(rate=rate, device=rec.name, midi=midi.name, events=log),
                                           open(recp.rsplit('.', 1)[0] + '.json', 'w'), indent=1)
