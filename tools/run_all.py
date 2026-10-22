@@ -8,7 +8,7 @@ import argparse, concurrent.futures as cf, difflib, os, re, runpy, subprocess, s
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 QUICK = ['test_lfo', 'test_mfx', 'test_fx', 'test_route', 'test_kset', 'test_arp', 'test_padled', 'test_voice', 'test_synth',
-         'test_mfx_mod', 'test_remote', 'test_loop_timing', 'test_talkback']
+         'test_mfx_mod', 'test_remote', 'test_loop_timing', 'test_talkback', 'test_diskless']
 FULL = ['test_v10'] + QUICK                     # longest first
 
 

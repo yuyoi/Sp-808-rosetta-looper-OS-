@@ -117,7 +117,7 @@ def main(image_path, out):
           '(expect P2 100, P1 5 = PHASER: MODE has 6 entries since v1.99) words', check(0))
     shots.append(('CONTROLS', sim.shot()))
     # ---- KEYS takes DSP1: our groups cleared; back: everything again ----
-    sim.key(bm.K_EXIT); sim.run(5)
+    sim.key(bm.K_EXIT); sim.key(bm.K_EXIT); sim.run(5)          # tab -> tab list -> home (v1.99b)
     e.wb(bm.CUR, [t for t, _ in bm.TILES].index('keys')); sim.key(bm.K_ENTER); sim.run(30)
     left = [k for k in range(3) if ew(k)]
     print('KEYS       MLOADED', e.rb(bm.MLOADED), 'MFX WRITE groups still set:', left, '(expect [])')

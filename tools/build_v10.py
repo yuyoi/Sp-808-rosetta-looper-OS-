@@ -575,6 +575,11 @@ RM_CMD = LANE_RAM['lead'][0] + 0x28                                     # pendin
 STOCK_M_CC, MIDI_CC_SLOT = 0x134F7A, MIDI_TABLE + 12                    # stock control-change handler, its slot
 SCI0_SSR, SCI0_TDR = 0xFFFF7C, 0xFFFF7B                                 # MIDI out (as the stock THRU echo 0x1356D2)
 INIT_LEAD += [(RM_CMD, 0)] + [(RM_REG + i, 0) for i in range(8)]
+# v1.99b diskless mode: stock screen 3 ("Please Insert Zip Disk" and other messages, handler 0x1481C2) ignores every
+# key, so with no disk the unit was stuck there. EXIT on it now goes to our home menu (stock 0x13FC8A switch).
+MSG_SCREEN, MSG_HANDLER, FORCE_SCREEN = 3, 0x1481C2, 0x13FC8A
+DISKLESS = LANE_RAM['lead'][0] + 0x30                                   # 1 = left the disk message with EXIT
+INIT_LEAD += [(DISKLESS, 0)]
 STRS_LEAD += [('s_ksynth', 'SYNTH ONLY'), ('s_vtag', 'V' + VER_TXT)]   # v1.99: menu status
 KSTAB = RAM_BASE + 0x45C
 KSET_TABS = [('KEYS SOUND', [('RELEASE', KREL, 0, len(REL_MS) - 1, None, ('t', 'rel_ms', 'MS')),
@@ -948,12 +953,16 @@ def build():
         a.cmp_w_imm(K_DOWN, 5); a.beq(L('kmd')); a.cmp_w_imm(K_RIGHT, 5); a.beq(L('kmd'))
         a.cmp_w_imm(K_ENTER, 5); a.beq(L('kmok'))
         a.cmp_w_imm(K_EXIT, 5); a.bne16('done')
-        set_byte(KDMENU, 0); a.bra16('redraw')
+        set_byte(KDMENU, 0); a.bra16('k_other')           # v1.99b: EXIT on the tab list = home (one level up)
         a.label(L('kmu')); a.cmp_b_imm(0, 'r0l'); a.beq16('redraw'); a.add_b_imm(0xFF, 'r0l'); a.bra(L('kmst'))
         a.label(L('kmd')); a.cmp_b_imm(len(tabs) - 1, 'r0l'); a.bcc16('redraw'); a.add_b_imm(1, 'r0l')
         a.label(L('kmst')); a.mov_b_to_abs('r0l', KDMSEL); a.bra16('redraw')
         a.label(L('kmok')); a.mov_b_to_abs('r0l', TAB); set_byte(CURV, 0); set_byte(KDMENU, 0); a.bra16('redraw')
         a.label(L('kpage'))                               # ---- parameter page
+        if P_.get('menu', True):                          # v1.99b: EXIT on a tab = back to the tab list
+            a.cmp_w_imm(K_EXIT, 5); a.bne(L('knx'))
+            a.mov_b_from_abs(TAB, 'r0l'); a.mov_b_to_abs('r0l', KDMSEL); set_byte(KDMENU, 1); a.bra16('redraw')
+            a.label(L('knx'))
         a.cmp_w_imm(K_ENTER, 5); a.bne(L('kcus'))
         if P_.get('menu', True):
             a.mov_b_from_abs(TAB, 'r0l'); a.mov_b_to_abs('r0l', KDMSEL); set_byte(KDMENU, 1); a.bra16('redraw')
@@ -2392,6 +2401,13 @@ def build():
     for i in range(4): a.mov_b_from_abs(RM_REG + i, 'r0l'); a.bsr16('rm_tx')
     a.mov_b_ld(2, 'r0l'); a.bsr16('rm_hex'); rm_send(0xF7)
     a.label('rme_x'); a.pop_l(3); a.pop_l(2); a.pop_l(1); a.rts()
+    a.label('scr_msg')                         # screen 3 (stock messages, "Please Insert Zip Disk"): keys were ignored
+    a.cmp_w_imm(9, 0); a.beq('smsg_k'); a.jmp(MSG_HANDLER)
+    a.label('smsg_k')
+    a.mov_w_from_abs(KEY_EVENT, 0); a.cmp_w_imm(K_EXIT, 0); a.bne('smsg_x')
+    set_byte(DISKLESS, 1)
+    a.mov_w_imm(SCREEN, 0); a.jsr(FORCE_SCREEN)            # EXIT = diskless: our home menu
+    a.label('smsg_x'); a.mov_w_imm(0, 0); a.rts()
     a.label('rk_on'); a.push_l(1)                                                   # r0l = 14 / 15 (MIDI ch 15 / 16)
     a.mov_b_from_abs(MIDI_VEL, 'r1h'); a.cmp_b_imm(0, 'r1h'); a.beq('rk_rel')       # velocity 0 = note-off
     a.cmp_b_imm(64, 'r1h'); a.bcs('rk_pl'); a.mov_b_imm(0x01, 'r1h'); a.bra('rk_code')   # 64+: SHIFT (0x100)
@@ -4460,6 +4476,7 @@ def main(raw, outdir):
         img[e:e + 22] = struct.pack('>IIIIIH', fl, new_handler,
                                     pa if params is None else params, pg if page is None else page, x, par)
     patch_screen(SCREEN, 0x13D224, labels['menu'], params=0xFFFFFFFF, page=0)
+    patch_screen(MSG_SCREEN, MSG_HANDLER, labels['scr_msg'])          # v1.99b: EXIT leaves the disk message
     patch_screen(SCR_RECORD, STOCK_SCR22, labels['w22'])
     patch_screen(SCR_DONE, STOCK_SCR23, labels['w23'])
     for sites, target, ours in ((PATCH_VT, VT_SWITCH, 'lp_vt'), (PATCH_OFF, ALL_PADS_OFF, 'lp_off')):

@@ -65,7 +65,7 @@ def main(image_path, out):
     shots.append(('PAN: L64 R63 R6', sim.shot()))
     sim.key(bm.K_ENTER); sim.key(bm.K_DOWN); sim.key(bm.K_DOWN); sim.run(5); shots.append(('menu scrolled', sim.shot()))
     sim.key(bm.K_ENTER); sim.run(5); shots.append(('AUX SENDS', sim.shot()))
-    sim.key(bm.K_EXIT); sim.run(5)
+    sim.key(bm.K_EXIT); sim.run(5); print("EXIT once  tab list open", e.rb(bm.KDMENU), "page", e.rb(bm.PAGE), "(expect 1, 6)"); sim.key(bm.K_EXIT); sim.run(5)
     print('EXIT       page', e.rb(bm.PAGE), 'cursor', e.rb(bm.CUR), '(expect 0, %d)' % tile)
     print('applied codes', applied)
     # ---- LAB: ANALOG INPUTS (live bars) and BUTTONS (last key, factory name) ----
@@ -91,7 +91,7 @@ def main(image_path, out):
     sim.key(0x4093); sim.run(5); shots.append(('LAB buttons: MARK released', sim.shot()))
     sim.key(bm.K_ENTER); sim.run(10); print('menu open  key mask %04X (expect 0002 again)' % e.rw(bm.KEYMASK))
     sim.key(bm.K_ENTER); sim.run(10); print('BUTTONS    key mask %04X (expect FFFF)' % e.rw(bm.KEYMASK))
-    sim.key(bm.K_EXIT); sim.run(10); print('EXIT       page %d key mask %04X (expect 0, 0002)' % (e.rb(bm.PAGE), e.rw(bm.KEYMASK)))
+    sim.key(bm.K_EXIT); sim.key(bm.K_EXIT); sim.run(10); print('EXIT       page %d key mask %04X (expect 0, 0002)' % (e.rb(bm.PAGE), e.rw(bm.KEYMASK)))
     sim.key(bm.K_ENTER); sim.run(10); print('LAB again  tab %d key mask %04X (expect 1, FFFF)' % (e.rb(bm.LTAB), e.rw(bm.KEYMASK)))
     sim.call('menu', 1); print('leave evt  key mask %04X (expect 0002)' % e.rw(bm.KEYMASK)); sim.run(10)
     sim.stock_eats = False
@@ -142,7 +142,7 @@ def main(image_path, out):
         e.wb(bm.LVL_L, l); e.wb(bm.LVL_R, r); sim.run(40)
         print('  L %3d R %3d -> pads lit %s' % (l, r, pads_lit()))
     shots.append(('PAD VU', sim.shot()))
-    sim.key(bm.K_EXIT); sim.run(20)
+    sim.key(bm.K_EXIT); sim.key(bm.K_EXIT); sim.run(20)
     print('EXIT       pads back to the stock [3, 6]:', pads_lit(), e.rw(prow) == pstock)
     before[1] = pstock                                       # (the test lit stock pads 3 / 6 in between)
     after = [e.rw(bm.LED_ROWS + 2 * r) for r in range(16)]

@@ -106,7 +106,7 @@ def main(image_path, out):
     print('gate       Roland write after OFF ->', r)
     # back on, then KEYS takes DSP1 and gives it back: MFX reloads by itself
     sim.key(bm.K_RIGHT); sim.run(10); nl = len([x for x in sim.dsp_log if x[1] == 'load'])
-    sim.key(bm.K_EXIT); sim.run(5)
+    sim.key(bm.K_EXIT); sim.key(bm.K_EXIT); sim.run(5)          # tab -> tab list -> home (v1.99b)
     e.wb(bm.CUR, [t for t, _ in bm.TILES].index('keys')); sim.key(bm.K_ENTER); sim.run(30)
     print('KEYS       active', e.rb(bm.KACTIVE), 'KLOADED', e.rb(bm.KLOADED), 'MLOADED', e.rb(bm.MLOADED), 'KGATE %02X' % e.rb(bm.KGATE))
     sim.key(bm.K_EXIT); sim.run(30)
