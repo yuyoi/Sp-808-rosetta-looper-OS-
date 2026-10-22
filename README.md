@@ -106,7 +106,11 @@ Open points for whoever picks it up:
 You must supply Roland's **own update file** (`SP808v1050.zip`, SP-808 OS v1.05). It is Roland's copyrighted code
 and is not in this repo.
 
-**Easiest: Rosetta Patcher.** Install Python 3 (`pip install numpy pillow`), then double-click
+<p align="center"><img src="assets/hexgirl_icon.png" width="96" alt="Rosetta Patcher icon"></p>
+
+**Easiest: Rosetta Patcher (Windows).** Download `RosettaPatcher.exe` from the
+[Releases](https://github.com/yuyoi/Sp-808-rosetta-looper-OS-/releases) page and run it: no Python needed. Or, with
+Python 3 (`pip install numpy pillow`), double-click
 `tools/Rosetta_Patcher.bat` (or run `python tools/rosetta_patcher.py`). Pick your `SP808v1050.zip`, an output
 folder and, optionally, your Zip / ZuluIDE disk image. It builds `SP808.PRG` and can put it straight into the image
 (a `.bak` is made first, and the file is read back to check it). Command line:
