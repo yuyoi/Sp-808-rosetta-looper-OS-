@@ -63,10 +63,14 @@ def build(img, outdir, log=print):
 
 
 def install(prg, disk, log=print):
-    import subprocess
-    r = subprocess.run([sys.executable, '-I', os.path.join(HERE, 'fat_add.py'), disk, prg, '--replace'],
-                       capture_output=True, text=True)
-    if r.returncode: raise RuntimeError('fat_add failed:\n' + r.stdout + r.stderr)
+    import fat_add                                    # in-process (works inside the .exe too)
+    old_argv, old_out = sys.argv, sys.stdout; sys.argv, sys.stdout = ['fat_add', disk, prg, '--replace'], io.StringIO()
+    try:
+        fat_add.main()
+    except SystemExit as ex:
+        if ex.code: raise RuntimeError('fat_add failed: %s\n%s' % (ex.code, sys.stdout.getvalue()))
+    finally:
+        sys.argv, sys.stdout = old_argv, old_out
     data, prgb = open(disk, 'rb').read(), open(prg, 'rb').read()
     i = data.find(prgb[:64])
     if i < 0 or data[i:i + len(prgb)] != prgb: raise RuntimeError('read-back check failed: the PRG is not in the image')
@@ -86,23 +90,38 @@ def run(upd, outdir, disk=None, log=print):
 def gui():
     import tkinter as tk
     from tkinter import filedialog, messagebox, scrolledtext
-    root = tk.Tk(); root.title('Rosetta Patcher - SP-808'); root.geometry('640x420')
+    BG, PANEL, BLUE, GREEN, TXT = '#05080c', '#0d141c', '#2ec4ff', '#39ff88', '#cfeee0'
+    root = tk.Tk(); root.title('Rosetta Patcher - SP-808'); root.geometry('660x460'); root.configure(bg=BG)
+    base = getattr(sys, '_MEIPASS', os.path.join(HERE, '..'))
+    for ico in (os.path.join(base, 'tools', 'rosetta_patcher.ico'), os.path.join(HERE, 'rosetta_patcher.ico')):
+        if os.path.exists(ico):
+            try: root.iconbitmap(ico)
+            except tk.TclError: pass
+            break
+    tk.Label(root, text='ROSETTA OS  //  SP-808 PATCHER', bg=BG, fg=GREEN, font=('Consolas', 15, 'bold')).grid(
+        row=0, column=0, columnspan=3, sticky='w', padx=10, pady=(10, 2))
+    lab = dict(bg=BG, fg=BLUE, font=('Consolas', 10))
+    ent = dict(bg=PANEL, fg=TXT, insertbackground=GREEN, relief='flat', font=('Consolas', 10), highlightthickness=1,
+               highlightbackground='#1b2a36', highlightcolor=BLUE)
+    btn_s = dict(bg=PANEL, fg=GREEN, activebackground=BLUE, activeforeground=BG, relief='flat', font=('Consolas', 10, 'bold'))
     v_upd, v_out, v_img = tk.StringVar(), tk.StringVar(value=os.path.join(os.path.expanduser('~'), 'Rosetta_SP808')), tk.StringVar()
     def row(r, label, var, pick):
-        tk.Label(root, text=label, anchor='w').grid(row=r, column=0, sticky='w', padx=8, pady=4)
-        tk.Entry(root, textvariable=var, width=60).grid(row=r, column=1, sticky='we', padx=4)
-        tk.Button(root, text='...', command=pick, width=3).grid(row=r, column=2, padx=8)
-    row(0, 'Roland update', v_upd, lambda: v_upd.set(filedialog.askopenfilename(
+        tk.Label(root, text=label, anchor='w', **lab).grid(row=r, column=0, sticky='w', padx=10, pady=5)
+        tk.Entry(root, textvariable=var, width=60, **ent).grid(row=r, column=1, sticky='we', padx=4, ipady=3)
+        tk.Button(root, text='...', command=pick, width=3, **btn_s).grid(row=r, column=2, padx=10)
+    row(1, 'Roland update', v_upd, lambda: v_upd.set(filedialog.askopenfilename(
         title='SP808v1050.zip, an SP808#1.MID or sp808_v1050_raw.bin',
         filetypes=[('Roland update', '*.zip *.MID *.mid *.bin'), ('all', '*.*')]) or v_upd.get()))
-    row(1, 'Output folder', v_out, lambda: v_out.set(filedialog.askdirectory() or v_out.get()))
-    row(2, 'Disk image (optional)', v_img, lambda: v_img.set(filedialog.askopenfilename(
+    row(2, 'Output folder', v_out, lambda: v_out.set(filedialog.askdirectory() or v_out.get()))
+    row(3, 'Disk image (optional)', v_img, lambda: v_img.set(filedialog.askopenfilename(
         title='Zip / ZuluIDE disk image', filetypes=[('disk image', '*.img *.ima *.hda'), ('all', '*.*')]) or v_img.get()))
     root.columnconfigure(1, weight=1)
-    tk.Label(root, text="You need Roland's own SP808v1050.zip (SP-808 OS 1.05). It is not included.", fg='#555').grid(
-        row=3, column=0, columnspan=3, sticky='w', padx=8)
-    logw = scrolledtext.ScrolledText(root, height=14); logw.grid(row=5, column=0, columnspan=3, sticky='nsew', padx=8, pady=8)
-    root.rowconfigure(5, weight=1)
+    tk.Label(root, text="You need Roland's own SP808v1050.zip (SP-808 OS 1.05). It is not included.", bg=BG,
+             fg='#4f6b7a', font=('Consolas', 9)).grid(row=4, column=0, columnspan=3, sticky='w', padx=10)
+    logw = scrolledtext.ScrolledText(root, height=14, bg=PANEL, fg=GREEN, insertbackground=GREEN, relief='flat',
+                                     font=('Consolas', 9), highlightthickness=1, highlightbackground='#1b2a36')
+    logw.grid(row=6, column=0, columnspan=3, sticky='nsew', padx=10, pady=10)
+    root.rowconfigure(6, weight=1)
     q = queue.Queue()
     def log(s): q.put(s)
     def pump():
@@ -124,7 +143,8 @@ def gui():
             except Exception as ex: log('ERROR: %s' % ex)
             log('__done__')
         threading.Thread(target=work, daemon=True).start()
-    btn = tk.Button(root, text='Build Rosetta OS', command=go, height=2); btn.grid(row=4, column=0, columnspan=3, pady=4)
+    btn = tk.Button(root, text='BUILD ROSETTA OS', command=go, height=2, width=24, **btn_s)
+    btn.config(fg=BG, bg=GREEN, activebackground=BLUE); btn.grid(row=5, column=0, columnspan=3, pady=6)
     pump(); root.mainloop()
 
 

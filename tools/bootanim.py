@@ -27,7 +27,8 @@ TICK = 50000                # 0x1480EA units per tick; stock waits 62500 per fra
 X0, STRIP, NSTRIP, ROWS = 2, 22, 6, 32
 
 
-FRAMES = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'assets', 'roland_chan_frames.npz')
+FRAMES = os.path.join(getattr(sys, '_MEIPASS', os.path.join(os.path.dirname(os.path.abspath(__file__)), '..')),
+                      'assets', 'roland_chan_frames.npz')   # (_MEIPASS: inside the Rosetta Patcher .exe)
 
 
 def frames():
