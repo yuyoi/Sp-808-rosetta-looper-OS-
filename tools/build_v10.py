@@ -578,6 +578,7 @@ INIT_LEAD += [(RM_CMD, 0)] + [(RM_REG + i, 0) for i in range(8)]
 # v1.99b diskless mode: stock screen 3 ("Please Insert Zip Disk" and other messages, handler 0x1481C2) ignores every
 # key, so with no disk the unit was stuck there. EXIT on it now goes to our home menu (stock 0x13FC8A switch).
 MSG_SCREEN, MSG_HANDLER, FORCE_SCREEN = 3, 0x1481C2, 0x13FC8A
+MSG_INDEX = 0x43B3A7                            # which message (table 0x168340); 0 = "Please Insert / Zip Disk."
 DISKLESS = LANE_RAM['lead'][0] + 0x30                                   # 1 = left the disk message with EXIT
 INIT_LEAD += [(DISKLESS, 0)]
 STRS_LEAD += [('s_ksynth', 'SYNTH ONLY'), ('s_vtag', 'V' + VER_TXT)]   # v1.99: menu status
@@ -2402,10 +2403,13 @@ def build():
     a.mov_b_ld(2, 'r0l'); a.bsr16('rm_hex'); rm_send(0xF7)
     a.label('rme_x'); a.pop_l(3); a.pop_l(2); a.pop_l(1); a.rts()
     a.label('scr_msg')                         # screen 3 (stock messages, "Please Insert Zip Disk"): keys were ignored
-    a.cmp_w_imm(9, 0); a.beq('smsg_k'); a.jmp(MSG_HANDLER)
+    a.cmp_w_imm(9, 0); a.beq('smsg_k')
+    a.cmp_w_imm(0, 0); a.bne('smsg_st')                     # enter: "Please Insert Zip Disk" (message 0) = skip it:
+    a.mov_b_from_abs(MSG_INDEX, 'r1l'); a.cmp_b_imm(0, 'r1l'); a.beq('smsg_go')   # boot straight to our home (user)
+    a.label('smsg_st'); a.jmp(MSG_HANDLER)
     a.label('smsg_k')
     a.mov_w_from_abs(KEY_EVENT, 0); a.cmp_w_imm(K_EXIT, 0); a.bne('smsg_x')
-    set_byte(DISKLESS, 1)
+    a.label('smsg_go'); set_byte(DISKLESS, 1)
     a.mov_w_imm(SCREEN, 0); a.jsr(FORCE_SCREEN)            # EXIT = diskless: our home menu
     a.label('smsg_x'); a.mov_w_imm(0, 0); a.rts()
     a.label('rk_on'); a.push_l(1)                                                   # r0l = 14 / 15 (MIDI ch 15 / 16)

@@ -15,12 +15,14 @@ def main(image_path):
     calls = []
     e.stubs[bm.MSG_HANDLER] = lambda e: calls.append(('stock', e.g16(0)))
     e.stubs[bm.FORCE_SCREEN] = lambda e: calls.append(('goto', e.g16(0)))
-    e.wb(bm.DISKLESS, 0)
+    e.wb(bm.DISKLESS, 0); e.wb(bm.MSG_INDEX, 1)                         # another message (e.g. Wrong Disk)
     for ev in (0, 5, 6): sim.call('scr_msg', ev)
     e.ww(bm.KEY_EVENT, bm.K_RIGHT); sim.call('scr_msg', 9)
     print('events     0/5/6 -> stock, RIGHT ignored:', calls, '(expect 3 x stock, no goto)')
     del calls[:]; e.ww(bm.KEY_EVENT, bm.K_EXIT); sim.call('scr_msg', 9)
     print('EXIT       ->', calls, 'DISKLESS', e.rb(bm.DISKLESS), '(expect goto 5, 1)')
+    del calls[:]; e.wb(bm.DISKLESS, 0); e.wb(bm.MSG_INDEX, 0); sim.call('scr_msg', 0)
+    print('no disk    "Please Insert Zip Disk" opens ->', calls, 'DISKLESS', e.rb(bm.DISKLESS), '(expect goto 5 at once, 1)')
     # Mac pages: EXIT on a tab opens the tab list, EXIT on the list goes home
     e.wb(bm.PAGE, bm.P_HOME); sim.call('menu', 0); sim.run(5)
     e.wb(bm.CUR, [t for t, _ in bm.TILES].index('route')); sim.key(bm.K_ENTER); sim.run(10)
