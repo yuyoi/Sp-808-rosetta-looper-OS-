@@ -95,7 +95,7 @@ def gui():
     base = getattr(sys, '_MEIPASS', os.path.join(HERE, '..'))
     for ico in (os.path.join(base, 'tools', 'rosetta_patcher.ico'), os.path.join(HERE, 'rosetta_patcher.ico')):
         if os.path.exists(ico):
-            try: root.iconbitmap(ico)
+            try: root.iconbitmap(default=ico)            # default= : the taskbar too
             except tk.TclError: pass
             break
     tk.Label(root, text='ROSETTA OS  //  SP-808 PATCHER', bg=BG, fg=GREEN, font=('Consolas', 15, 'bold')).grid(
