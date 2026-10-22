@@ -518,6 +518,26 @@ LANE_RAM = dict(lead=(RAM_BASE + 0x800, RAM_BASE + 0xC00), mfx=(RAM_BASE + 0xC00
                 loop=(RAM_BASE + 0x1000, RAM_BASE + 0x1800))                 # 0x1800-0x1FFF spare, FB at 0x2000
 INIT_LEAD = []                                  # (address, byte) set at power-on, lead lane (KEYS / synth)
 INIT_MFX = [(MPX + i, mfxdsp.PX_DEFAULT[i % 3]) for i in range(9)]   # MFX lane (v1.99: P4-P6 per slot)
+# ---- VOICE (v2.0, MFX lane): vocdsp.py = Narrator voice chain + vocoder in DSP1, ENGINE row = OFF / MFX / VOICE ----
+import vocdsp
+VOX_PROG, VOX_PARAMS = vocdsp.build()
+VOX_BASE = MFX_BASE + 0x900                     # 0x1B9200: the VOICE program table (ledger: free flash, lead asked)
+VHB_SLOTS = ['lv', 'kr', 'ka'] + [p_ + t_ for p_ in 'mc' for t_ in ('f', 'fl', 'g', 'gl', 'a', 'al', 'n', 'nl', 'b', 'bl')]
+VCHAIN = sorted((n_ for n_ in VOX_PARAMS if not (n_[:3] == 'v_h' and n_[3].isdigit())), key=lambda n_: VOX_PARAMS[n_][1])
+VHB0 = len(VCHAIN)                              # VVAL: the chain's values, then a 23-slot block per half-band
+VVI = {n_: i for i, n_ in enumerate(VCHAIN)}    #  (fixed layout for the band routine; absent slots are scratch)
+VVI.update({'v_h%d_%s' % (h_, t_): VHB0 + len(VHB_SLOTS) * h_ + j for h_ in range(vocdsp.NHB)
+            for j, t_ in enumerate(VHB_SLOTS)})
+VOX_NAMES = sorted(VOX_PARAMS, key=lambda n_: VOX_PARAMS[n_][1])      # the words written (word order)
+VVSIZE = VHB0 + len(VHB_SLOTS) * vocdsp.NHB
+VVAL = RAM_BASE + 0xC00                         # a coefficient per VOICE word (= MFX's MSHAD: never both loaded,
+VUI = RAM_BASE + 0xDC0                          #  mfx_load rewrites it); VUI = the UI bytes (vocdsp.UI_KEYS order)
+VLOADED, MPREV, VN, VKR, VKAR = (RAM_BASE + 0xDFA + i for i in range(5))
+VQ = RAM_BASE + 0xE00                           # (word) band q
+assert VVAL + VVSIZE <= MPX and MPPX + 3 <= VUI and VUI + len(vocdsp.UI_KEYS) <= VLOADED   # (also over MVAL:
+VB_, VF_ = RAM_BASE + 0xE02, RAM_BASE + 0xE03   # MFX scratch, rebuilt by every mfx_apply); band routine args
+INIT_MFX += [(VUI + i, r_[3]) for i, r_ in enumerate(vocdsp.UI_ROWS)] + [(VLOADED, 0), (MPREV, 0)]
+def VX(k): return VUI + vocdsp.UI_KEYS.index(k)
 INIT_LOOP = []                                  # Looper v2 lane
 STRS_LEAD = []                                  # (label, text): lead lane
 STRS_MFX = []                                   # MFX lane
@@ -548,12 +568,34 @@ def mf_slot_tab(k):
             [(('dyn', ML4 + k, mfxdsp.PX_NAMES[n]), MPX + 3 * k + n, 0, 127, 'mfx_par%d' % k, ('n',))
              for n in range(mfxdsp.NPX)])                       # v1.99: P4-P6, labels by MOD mode
 MFX_TABS = [
-    ('FX CHAIN', [('ENGINE', MON, 0, 1, 'mfx_onoff', ('s', 'mf_offon', 2))] +
+    ('FX CHAIN', [('ENGINE', MON, 0, 2, 'mfx_onoff', ('s', 'mf_eng', 3))] +
                  [x for k in range(3) for x in (('SLOT %d AT' % (k + 1), MSLOT + k, 0, 14, 'mfx_route', ('s', 'mf_codes', 15)),
                                                 ('SLOT %d LEVEL' % (k + 1), MLVL + k, 0, 127, 'mfx_levels', ('n',)))]),
     mf_slot_tab(0), mf_slot_tab(1), mf_slot_tab(2),
     ('CONTROLS', [(nm, MCTRL + i, 0, len(MF_TGTS) - 1, 'mfx_ctrl_reset', ('s', 'mf_tgts', len(MF_TGTS)))
                   for i, (nm, ch) in enumerate(MF_SRC)] + [('PADS 1-3', MPADS, 0, 1, None, ('s', 'mf_padm', 2))])]
+def vrow(lbl, key, disp=('n',), hook='mx2_apply'):              # v2.0: a VOICE row (vocdsp.UI_ROWS range)
+    lo_, hi_ = [(r_[1], r_[2]) for r_ in vocdsp.UI_ROWS if r_[0] == key][0]
+    return (lbl, VX(key), lo_, hi_, hook, disp)
+MF_OO = ('s', 'mf_offon', 2)
+MFX_TABS += [
+    ('NARRATOR', [vrow('NS', 'ns_sw', MF_OO), vrow('NS THRESH', 'ns_thr'), vrow('NS RELEASE', 'ns_rel'),
+                  vrow('LIMITER', 'lm_sw', MF_OO), vrow('LMT LEVEL', 'lm_level', ('sgn', 60, 'DB')),
+                  vrow('LMT THRESH', 'lm_thr', ('sgn', 60, 'DB')), vrow('LMT RELEASE', 'lm_rel'),
+                  vrow('DE-ESS SENS', 'ds_sens'), vrow('DE-ESS FREQ', 'ds_freq', ('t', 'mx2_hz100', 'HZ')),
+                  vrow('ENHANCER', 'en_sw', MF_OO), vrow('ENH SENS', 'en_sens'), vrow('ENH MIX', 'en_mix'),
+                  vrow('EQ', 'eq_sw', MF_OO), vrow('LOW GAIN', 'eq_lg', ('sgn', 12, 'DB')),
+                  vrow('LOW FREQ', 'eq_lf', ('t', 'mx2_hz10', 'HZ')), vrow('MID GAIN', 'eq_mg', ('sgn', 12, 'DB')),
+                  vrow('MID FREQ', 'eq_mf', ('t', 'mx2_mfhz', 'HZ')), vrow('MID Q', 'eq_mq'),
+                  vrow('HIGH GAIN', 'eq_hg', ('sgn', 12, 'DB')), vrow('HIGH FREQ', 'eq_hf', ('t', 'mx2_hz100', 'HZ')),
+                  vrow('EQ OUT', 'eq_out', ('sgn', 12, 'DB'))]),
+    ('VOCODER', [vrow('PRESET', 'preset', ('s', 'mx2_pre', len(vocdsp.PRESET_NAMES)), 'mx2_preset'),
+                 vrow('FILTER', 'filt', ('s', 'mx2_flt', 2)), vrow('BANDS', 'bands'),
+                 vrow('FORMANT', 'formant', ('sgn', 24, '')), vrow('RESO', 'reso'), vrow('ATTACK', 'attack'),
+                 vrow('RELEASE', 'release'), vrow('HOLD', 'hold', MF_OO), vrow('MIC SENS', 'mic_sens'),
+                 vrow('SYNTH IN', 'synth_in'), vrow('MICMIX LEV', 'mm_lev'), vrow('MICMIX PAN', 'mm_pan', ('pan',)),
+                 vrow('MICMIX HPF', 'mm_hpf'), vrow('OUT MODE', 'out_mode', ('s', 'mx2_out', 2)), vrow('LEVEL', 'level')]),
+    ('BANDS', [vrow('BAND %d' % (i + 1), 'vchar%d' % i) for i in range(vocdsp.NHB)])]
 KLOOP, LP_FIRST, LP_LL, LP_XF, LTMP = RAM_BASE + 0x320, RAM_BASE + 0x322, RAM_BASE + 0x324, RAM_BASE + 0x326, RAM_BASE + 0x39C
 # S-EDIT (v1.91 on the Mac engine): rows in the old order (RELEASE, THRU, REVERSE, LOOP: ENTER still toggles), then
 # the knob-driven values read-only. One tab, so no submode menu.
@@ -613,6 +655,9 @@ MAC_STRS += [('s_lbc%d' % i, n) for i, n in enumerate(LAB_CH_NAMES)]
 MAC_STRS += [('s_lfw%d' % i, n) for i, n in enumerate(LFO_WAVES)] + [('s_arm%d' % i, n) for i, n in enumerate(ARP_MODES)]
 MAC_STRS += [('s_vmn%d' % i, n) for i, n in enumerate(VM_NAMES)]
 MAC_STRS += [('s_lfr%d' % i, ('%g' % hz) + 'HZ') for i, hz in enumerate(LFO_HZ)]
+MAC_STRS += [('s_mfe%d' % i, n_) for i, n_ in enumerate(('OFF', 'MFX', 'VOICE'))]   # v2.0 ENGINE
+MAC_STRS += [('s_mfv%d' % i, n_) for i, n_ in enumerate(vocdsp.PRESET_NAMES)] + [('s_mfk0', '2-POLE'), ('s_mfk1', '4-POLE'),
+             ('s_mfu0', 'MONO'), ('s_mfu1', 'STEREO')]
 MAC_STRS += [('s_mfo0', 'OFF'), ('s_mfo1', 'ON')] + [('s_mfc%d' % i, n) for i, n in enumerate(MF_CODE_NAMES)]
 MAC_STRS += [('s_mfg%d' % i, n) for i, n in enumerate(MF_TGTS)] + [('s_mfp0', 'PLAY'), ('s_mfp1', 'FX SWITCH')]
 MAC_STRS += [('s_mfy%d' % i, n) for i, n in enumerate(mfxdsp.TYPES)] + [('s_mff%d' % i, n) for i, n in enumerate(mfxdsp.FLT_MODES)]
@@ -1081,9 +1126,10 @@ def build():
     a.mov_b_imm(0, 'r3h')
     fill_r3(1, 0, 30, 1); fill_r3(1, 31, 30, 1); fill_r3(1, 0, 1, 32); fill_r3(30, 0, 1, 32)
     D.mode(gfxlib.M_INV); fill_r3(2, 20, 28, 9); D.mode(gfxlib.M_SET)
-    a.mov_b_from_abs(WARN, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('d_flush')
+    a.mov_b_from_abs(WARN, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('dw_on'); a.jmp('d_flush')   # (jmp: d_flush may be > 32 KB away)
+    a.label('dw_on')
     D.text(112, 27, 's_ramwarn', 'font_tiny')
-    a.bra16('d_flush')
+    a.jmp('d_flush')
 
     # ---- MPC page ----
     a.label('d_mpc')
@@ -1142,7 +1188,7 @@ def build():
         a.mov_b_from_abs(MSG, 'r0l'); a.cmp_b_imm(k, 'r0l'); a.bne16(nx)
         D.popup(lbl, len(s))
         a.label(nx)
-    a.bra16('d_flush')
+    a.jmp('d_flush')
 
     # ---- KEYS page ----
     a.label('d_keys')
@@ -1191,7 +1237,7 @@ def build():
         D.frame(x, y, 6, 6); a.bra16(nx)
         a.label(on); D.fill(x, y, 6, 6)
         a.label(nx)
-    a.bra16('d_flush')
+    a.jmp('d_flush')
 
     # (S-EDIT is a Mac page since v1.91; these row helpers are shared)
     def row_put(text):
@@ -1221,6 +1267,13 @@ def build():
             a.mov_l_ind(2, 2); a.bsr16('row_str')
             a.label(end)
         elif disp[0] == 'n7': a.mov_b_from_abs(var, 'r0l'); a.and_b_imm(0x7F, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
+        elif disp[0] == 'sgn':                                  # v2.0 (MFX lane): byte - offset, signed, + unit
+            ng_, en_ = uniq('dsn'), uniq('dsg')
+            a.mov_b_from_abs(var, 'r0l'); a.cmp_b_imm(disp[1], 'r0l'); a.bcs(ng_)
+            a.add_b_imm(-disp[1] & 0xFF, 'r0l'); a.extu_w(0); a.bsr16('fmt_u'); a.bra(en_)
+            a.label(ng_); row_put('-')
+            a.mov_b_from_abs(var, 'r0h'); a.mov_b_imm(disp[1], 'r0l'); a.sub_b_rr('r0h', 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
+            a.label(en_); row_put(disp[2])
         elif disp[0] == 'dyn':                                  # the display depends on a TYPE variable
             end = uniq('dye')
             for t_, d_ in enumerate(disp[2]):
@@ -1286,7 +1339,7 @@ def build():
             a.bsr16('dd_rinv')
             a.label(sk)
         if len(tabs) > 3: scroll_bar('%s_sbm' % pid, len(tabs))
-        a.bra16('d_flush')
+        a.jmp('d_flush')
         a.label(pid + '_dpage')                           # ---- parameter page of the current submode
         for ti, (desc, items) in enumerate(tabs):
             nt = uniq('ddn')
@@ -1294,7 +1347,7 @@ def build():
             a.mov_b_from_abs(TAB, 'r0l'); a.cmp_b_imm(ti, 'r0l'); a.bne16(nt)
             mac_window('s_%sd%d' % (pid, ti), len(desc), 's_%snm' % pid, len(P_['name']))   # tab = submode, page right
             if isinstance(items, str):
-                a.bsr16(items + '_d'); a.bra16('d_flush'); a.label(nt); continue
+                a.bsr16(items + '_d'); a.jmp('d_flush'); a.label(nt); continue
             set_top(CURV, nit)
             for i, (lbl, var, lo, hi, ap, disp) in enumerate(items):
                 sk = uniq('dvs')
@@ -1316,9 +1369,9 @@ def build():
                 a.bsr16('dd_rinv')
                 a.label(sk)
             if nit > 3: scroll_bar('%s_sb%d' % (pid, ti), nit)
-            a.bra16('d_flush')
+            a.jmp('d_flush')
             a.label(nt)
-        a.bra16('d_flush')
+        a.jmp('d_flush')
     a.label('dd_rval')                                      # KROW right-aligned (ends at x 121) on row KDY
     a.mov_l_imm(KROW, 3); a.mov_b_imm(0, 'r2l')
     a.label('ddr_n'); a.mov_b_ldinc(3, 'r0l'); a.beq('ddr_e'); a.inc_b('r2l'); a.bra('ddr_n')
@@ -3364,20 +3417,29 @@ def build():
     # ---- MFX ----
     a.label('mfx_onoff')
     a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq16('mfx_off')
+    a.mov_b_from_abs(MPREV, 'r1l'); a.mov_b_to_abs('r0l', MPREV); a.cmp_b_imm(0, 'r1l'); a.bne('mfo_sv')   # v2.0:
     a.mov_b_from_abs(MIXER_LOC_IDX, 'r0l'); a.mov_b_to_abs('r0l', MSAVEIDX)      # remember the stock FX LOCATION
-    a.mov_b_from_abs(MIXER_LOC_FLAGS, 'r0l'); a.mov_b_to_abs('r0l', MSAVEFLG)
+    a.mov_b_from_abs(MIXER_LOC_FLAGS, 'r0l'); a.mov_b_to_abs('r0l', MSAVEFLG)   #  (only when coming from OFF)
+    a.label('mfo_sv')
     a.bset_abs(1, KGATE)                                                         # Roland's DSP1 writes stop here
     a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfo_x')     # (KEYS owns DSP1: the guard loads later)
-    a.bsr16('mfx_load'); a.bsr16('mfx_route')
+    a.bsr16('mx2_engine'); a.bsr16('mfx_route')
     a.label('mfo_x'); a.rts()
+    a.label('mx2_engine')                                       # v2.0: ENGINE 1 = MFX, 2 = VOICE program
+    a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.beq16('mx2_load'); a.bra16('mfx_load')
     a.label('mfx_off')
+    set_byte(MPREV, 0)
     a.bclr_abs(1, KGATE)
     for k in (1, 2): a.mov_w_imm(0, 1); a.mov_w_imm(k, 8); a.mov_w_imm(7, 0); a.jsr(MIXER_PARAM)   # slots 2/3 out
     a.mov_b_from_abs(MSAVEIDX, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_IDX)      # the stock FX LOCATION back
     a.mov_b_from_abs(MSAVEFLG, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_FLAGS); a.jsr(FX_LOC_APPLY)
+    a.mov_b_from_abs(VLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mff_nv')    # v2.0: VOICE was in
+    set_byte(VLOADED, 0); a.bra('mff_pt')
+    a.label('mff_nv')
     a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mff_x')
     a.bsr16('mfx_eram_clear')                                                    # our delay-RAM groups off first
     set_byte(MLOADED, 0)
+    a.label('mff_pt')
     a.mov_w_from_abs(FX_PATCH_BUF, 0); a.cmp_w_imm(20, 0); a.bcc('mff_x')        # the stock FX patch back (if sane)
     a.mov_l_imm(FX_PATCH_BUF, 0); a.jsr(FX_LOAD_PATCH)
     a.label('mff_x'); a.rts()
@@ -3387,7 +3449,7 @@ def build():
     a.mov_l_imm(MFX_BASE, 0); a.push_l(0)
     a.mov_w_imm(0x300 - 0x3C, 1); a.mov_w_imm(0x3C, 8); a.mov_w_imm(1, 0); a.jsr('own_load'); a.adds4(7)
     a.mov_w_imm(0xFFFF, 0); a.mov_w_to_abs(0, FX_CUR)                            # (the stock reloads its algorithm later)
-    set_byte(MLOADED, 1); set_byte(KLOADED, 0)                                   # KEYS' program is gone
+    set_byte(MLOADED, 1); set_byte(KLOADED, 0); set_byte(VLOADED, 0)            # KEYS' / VOICE's program is gone
     a.bsr16('mfx_eram_init')                                                     # every old group off, ours on
     a.mov_l_imm(MSHAD, 1); a.mov_w_imm(3 * MF_NENT, 2); a.mov_b_imm(0xFF, 'r0l')   # shadows invalid: write all
     a.label('mfl_sh'); a.mov_b_st('r0l', 1); a.adds1(1); a.mov_b_st('r0l', 1); a.adds1(1); a.dec_w1(2); a.bne('mfl_sh')
@@ -3687,13 +3749,219 @@ def build():
         a.mov_l_ld_disp(4 * s_, 3, 1); a.mov_w_imm(0x1000 | (MFX_PARAMS['m%d_ew' % s_][1] << 2), 0)
         a.push_l(3); a.jsr('own_eram'); a.pop_l(3)
     a.pop_l(3); a.rts()
+
+    def voice_code():                                           # ---- VOICE (v2.0): load, presets, vocdsp.values() ----
+        V_ = vocdsp
+        def vput(reg, name): a.mov_b_to_abs(reg, VVAL + VVI[name])
+        def vconst(name, val): a.mov_b_imm(val & 0xFF, 'r0l'); vput('r0l', name)
+        def vui(key, reg='r0l'): a.mov_b_from_abs(VX(key), reg)
+        def vcopy(table, key, stride, names):                   # names[j] = table[ui[key] * stride + j]
+            mf_ptr(table, VX(key), stride)
+            for j, n_ in enumerate(names): a.mov_b_ld_disp(j, 3, 'r0l'); vput('r0l', n_)
+        def vk4(table, key, pre): vcopy(table, key, 4, [pre + 'k', pre + 'kl', pre + 'n', pre + 'nl'])
+        def vhl(name):                                          # r0 = t (-16384..16383) -> name (hi), name l (lo7)
+            a.mov_w_rr(0, 1); a.shll_w(1); vput('r1h', name); a.and_b_imm(0x7F, 'r0l'); vput('r0l', name + 'l')
+        def vneg(): a.mov_w_rr(0, 1); a.mov_w_imm(0, 0); a.sub_w_rr(1, 0)
+        def vc8(name, neg):                                     # r0 = |t| -> name = c8(-+t)
+            ok_ = uniq('mx2c'); a.add_w_imm(64, 0); a.shll_w(0); a.cmp_b_imm(127, 'r0h'); a.bls(ok_); a.mov_b_imm(127, 'r0h')
+            a.label(ok_)
+            if neg: a.not_b('r0h'); a.inc_b('r0h')
+            vput('r0h', name)
+        def vif(key, then, other):                              # ui[key] != 0 ? then() : other()
+            el_, en_ = uniq('mx2e'), uniq('mx2f')
+            vui(key); a.cmp_b_imm(0, 'r0l'); a.beq16(el_); then(); a.bra16(en_)
+            a.label(el_); other(); a.label(en_)
+        def vdiv(key, mul, name, neg=None):                     # name = (mul * ui[key]) // 100
+            vui(key); a.mov_b_imm(mul, 'r1l'); a.mulxu_b('r1l', 0); a.mov_b_imm(100, 'r1l'); a.divxu_b('r1l', 0)
+            vput('r0l', name)
+            if neg: a.not_b('r0l'); a.inc_b('r0l'); vput('r0l', neg)
+        def vtab2(table, k1, n2, k2):                           # r0l = table[ui[k1] * n2 + ui[k2]] (byte)
+            vui(k1); a.mov_b_imm(n2, 'r1l'); a.mulxu_b('r1l', 0); vui(k2, 'r1l'); a.extu_w(1); a.add_w_rr(1, 0)
+            a.extu_l(0); a.mov_l_imm(table, 1); a.add_l_rr(0, 1); a.mov_b_ld(1, 'r0l')
+        def vfg(reg):                                           # r5 = TAB_FG[reg]
+            a.mov_b_rr(reg, 'r0l'); a.extu_w(0); a.shll_w(0); a.extu_l(0); a.mov_l_imm('mx2_fg', 1); a.add_l_rr(0, 1)
+            a.mov_w_ld(1, 5)
+        a.label('mx2_load')                                     # mute, VOICE program in, every word, unmute
+        for w in FX_MUTE_WORDS: a.mov_w_imm(0xF800, 8); a.mov_w_imm(0x1000 | (w << 2), 0); a.jsr('own_coef')
+        wait_ms(15)
+        a.mov_l_imm(VOX_BASE, 0); a.push_l(0)
+        a.mov_w_imm(0x300 - 0x3C, 1); a.mov_w_imm(0x3C, 8); a.mov_w_imm(1, 0); a.jsr('own_load'); a.adds4(7)
+        a.mov_w_imm(0xFFFF, 0); a.mov_w_to_abs(0, FX_CUR)
+        set_byte(VLOADED, 1); set_byte(MLOADED, 0); set_byte(KLOADED, 0)         # (MFX's / KEYS' program is gone)
+        a.push_l(2)                                             # every ERAM group off (VOICE has none)
+        a.mov_w_imm(0x1000 | (0x3C << 2), 2)
+        a.label('mx2_elp'); a.mov_l_imm(0, 1); a.mov_w_rr(2, 0); a.push_l(2); a.jsr('own_eram'); a.pop_l(2)
+        a.add_w_imm(5 << 2, 2); a.cmp_w_imm(0x1000 | (0x2F0 << 2), 2); a.bcs('mx2_elp')
+        a.pop_l(2)
+        a.bsr16('mx2_apply')
+        for w in FX_MUTE_WORDS: a.mov_w_imm(0x0100, 8); a.mov_w_imm(0x1000 | (w << 2), 0); a.jsr('own_coef')
+        a.rts()
+        a.label('mx2_preset')                                   # PRESET row: its UI bytes, then every word
+        a.push_l(2); a.push_l(3)
+        vui('preset'); a.mov_b_imm(len(V_.UI_KEYS), 'r1l'); a.mulxu_b('r1l', 0); a.extu_l(0)
+        a.mov_l_imm('mx2_pret', 3); a.add_l_rr(0, 3); a.mov_l_imm(VUI, 1); a.mov_b_imm(len(V_.UI_KEYS), 'r2l')
+        a.label('mx2_plp'); a.mov_b_ld(3, 'r0l'); a.mov_b_st('r0l', 1); a.adds1(3); a.adds1(1); a.dec_b('r2l'); a.bne('mx2_plp')
+        a.pop_l(3); a.pop_l(2)
+        a.label('mx2_apply')                                    # UI bytes -> VVAL (= vocdsp.values) -> every word
+        a.mov_b_from_abs(VLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mx2_a1'); a.rts()
+        a.label('mx2_a1'); a.mov_b_from_abs(KLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mx2_a2'); a.rts()
+        a.label('mx2_a2')
+        a.push_l(2); a.push_l(3); a.push_l(4); a.push_l(5); a.push_l(6)
+        vui('mic_sens'); vput('r0l', 'v_msens'); vui('synth_in'); vput('r0l', 'v_cin')
+        # NS
+        mf_ptr('mx2_nsr', VX('ns_rel'), 1); a.mov_b_ld(3, 'r0l'); vput('r0l', 'v_nsr')
+        a.mov_b_rr('r0l', 'r1l'); a.mov_b_imm(127, 'r0l'); a.sub_b_rr('r1l', 'r0l'); vput('r0l', 'v_nsa')
+        vconst('v_nsk', 127); vcopy('mx2_nst', 'ns_thr', 1, ['v_nst'])
+        for j, n_ in enumerate(('v_nsgk', 'v_nsgkl', 'v_nsgn', 'v_nsgnl')): vconst(n_, V_.NSG4[j])
+        vif('ns_sw', lambda: (vconst('v_nsoff', 32), vconst('v_nson', 0)), lambda: (vconst('v_nsoff', 0), vconst('v_nson', 64)))
+        # limiter + de-esser
+        vconst('v_lmr', -16)
+        def lm_on():
+            vcopy('mx2_lmt', 'lm_thr', 1, ['v_lmt']); vcopy('mx2_lmrel', 'lm_rel', 2, ['v_lmb', 'v_lmbl'])
+            vcopy('mx2_lmv', 'lm_level', 1, ['v_lmv'])
+            vif('ds_sens', lambda: vconst('v_dsoff', 32), lambda: vconst('v_dsoff', 0))
+        def lm_off():
+            vconst('v_lmt', -127); vconst('v_lmb', V_.LMOFF[0]); vconst('v_lmbl', V_.LMOFF[1])
+            vconst('v_lmv', 32); vconst('v_dsoff', 0)
+        vif('lm_sw', lm_on, lm_off)
+        a.mov_b_from_abs(VVAL + VVI['v_lmb'], 'r0h'); a.mov_b_from_abs(VVAL + VVI['v_lmbl'], 'r0l')
+        a.shll_b('r0l'); a.shlr_w(0); vneg(); vhl('v_lma')                          # lma = -(lmb hi << 7 | lo)
+        vk4('mx2_dsl', 'ds_freq', 'v_dsl')
+        for j, n_ in enumerate(('v_dsek', 'v_dsekl', 'v_dsen', 'v_dsenl')): vconst(n_, V_.DSE4[j])
+        vconst('v_dsk', 127); vcopy('mx2_dst', 'ds_sens', 1, ['v_dst'])
+        vif('en_sw', lambda: (vdiv('en_sens', 127, 'v_ens'), vdiv('en_mix', 64, 'v_enm')),
+            lambda: (vconst('v_ens', 0), vconst('v_enm', 0)))
+        # EQ
+        vk4('mx2_e0', 'eq_lf', 'v_e0'); vk4('mx2_e2', 'eq_hf', 'v_e2')
+        mf_ptr('mx2_mf', VX('eq_mf'), 2); a.mov_w_ld(3, 5)                          # r5 = F (mid)
+        mf_ptr('mx2_qm8', VX('eq_mq'), 2); a.mov_w_ld(3, 4)                         # r4 = q8
+        a.mov_w_rr(5, 0); vhl('v_e1f'); a.mov_w_rr(5, 0); vhl('v_e1a'); a.mov_w_rr(5, 0); vneg(); vhl('v_e1n')
+        a.mov_w_rr(5, 0); a.mulxu_w(4, 0)
+        for _ in range(4): a.shlr_l2(0)
+        a.cmp_l_imm(16383, 0); a.bls('mx2_q1'); a.mov_w_imm(16383, 0)
+        a.label('mx2_q1'); vneg(); vhl('v_e1g')
+        def eq_on():
+            vtab2('mx2_eqx', 'eq_out', 25, 'eq_hg'); vput('r0l', 'v_eqx')
+            vtab2('mx2_eql', 'eq_out', 25, 'eq_lg'); vput('r0l', 'v_eql')
+            vtab2('mx2_eqh', 'eq_out', 25, 'eq_hg'); vput('r0l', 'v_eqh')
+            vui('eq_out'); a.mov_b_imm(25, 'r1l'); a.mulxu_b('r1l', 0); vui('eq_mg', 'r1l'); a.extu_w(1)
+            a.add_w_rr(1, 0); a.shll_w(0); a.extu_l(0); a.mov_l_imm('mx2_eqm', 1); a.add_l_rr(0, 1); a.mov_w_ld(1, 0)
+            a.mov_b_imm(0, 'r6l'); a.cmp_w_imm(0x8000, 0); a.bcs('mx2_m1'); vneg(); a.mov_b_imm(1, 'r6l')
+            a.label('mx2_m1'); a.mulxu_w(4, 0); a.add_l_imm(0x2000, 0)
+            for _ in range(7): a.shlr_l2(0)
+            a.cmp_w_imm(127, 0); a.bls('mx2_m2'); a.mov_w_imm(127, 0)
+            a.label('mx2_m2'); a.cmp_b_imm(0, 'r6l'); a.beq('mx2_m3'); a.not_b('r0l'); a.inc_b('r0l')
+            a.label('mx2_m3'); vput('r0l', 'v_eqm')
+        vif('eq_sw', eq_on, lambda: (vconst('v_eqx', 32), vconst('v_eql', 0), vconst('v_eqh', 0), vconst('v_eqm', 0)))
+        # vocoder: n, q, envelope rates
+        vui('bands'); a.mov_b_rr('r0l', 'r2l'); a.cmp_b_imm(0, 'r2l'); a.bne('mx2_n0'); a.mov_b_imm(1, 'r2l')   # >= 1
+        a.label('mx2_n0')
+        vui('filt'); a.cmp_b_imm(0, 'r0l'); a.beq('mx2_n1'); a.cmp_b_imm(V_.NHB // 2, 'r2l'); a.bls('mx2_n1')
+        a.mov_b_imm(V_.NHB // 2, 'r2l')
+        a.label('mx2_n1'); a.mov_b_to_abs('r2l', VN)
+        vui('filt'); a.mov_b_imm(V_.NHB, 'r1l'); a.mulxu_b('r1l', 0); a.mov_b_rr('r2l', 'r1l'); a.add_b_imm(0xFF, 'r1l')
+        a.extu_w(1); a.add_w_rr(1, 0); a.shll_w(0); a.extu_l(0); a.mov_l_imm('mx2_qb', 1); a.add_l_rr(0, 1)
+        a.mov_w_ld(1, 4)                                                            # r4 = QB[filt][n - 1]
+        mf_ptr('mx2_qw', VX('reso'), 2); a.mov_w_ld(3, 0); a.mulxu_w(4, 0)          # * QW[reso] >> 14
+        for _ in range(7): a.shlr_l2(0)
+        a.cmp_l_imm(V_.QMAX, 0); a.bls('mx2_qm'); a.mov_w_imm(V_.QMAX, 0)
+        a.label('mx2_qm'); a.mov_w_to_abs(0, VQ)
+        def env_on():
+            mf_ptr('mx2_kr', VX('release'), 1); a.mov_b_ld(3, 'r2l'); a.mov_b_to_abs('r2l', VKR)
+            mf_ptr('mx2_ka', VX('attack'), 1); a.mov_b_ld(3, 'r0l'); a.sub_b_rr('r2l', 'r0l'); a.mov_b_to_abs('r0l', VKAR)
+        vif('hold', lambda: (set_byte(VKR, 0), set_byte(VKAR, 0)), env_on)
+        fb = V_.fine_hb(V_.NHB)
+        for h in range(V_.NHB):                                 # VB_ = band, VF_ = 1 stage 2 | 2 sounds | 4 15-bit
+            p4_, dn_ = uniq('mx2p'), uniq('mx2d')
+            a.mov_l_imm(VVAL + VVI['v_h%d_lv' % h], 6)
+            fine = 4 if h < fb else 0
+            vui('filt'); a.cmp_b_imm(0, 'r0l'); a.bne(p4_)
+            set_byte(VB_, h); set_byte(VF_, 2 | fine); a.bra(dn_)
+            a.label(p4_); set_byte(VB_, h // 2); set_byte(VF_, (3 if h % 2 else 0) | fine)
+            a.label(dn_); a.bsr16('mx2_band')
+        # mic mix + outputs
+        vk4('mx2_hpl', 'mm_hpf', 'v_hpl'); vdiv('mm_lev', 64, 'v_mml', 'v_mmln')
+        vcopy('mx2_pan', 'mm_pan', 2, ['v_oml', 'v_omr'])
+        def x2():                                               # 4-POLE: x 2 (<= 127)
+            ok_ = uniq('mx2x'); vui('filt', 'r1l'); a.cmp_b_imm(0, 'r1l'); a.beq(ok_)
+            a.mov_b_from_abs(VVAL + VVI['v_oll'], 'r0l'); a.add_b_rr('r0l', 'r0l'); a.bpl(ok_ + 'p'); a.mov_b_imm(127, 'r0l')
+            a.label(ok_ + 'p'); vput('r0l', 'v_oll')
+            a.label(ok_); a.mov_b_from_abs(VVAL + VVI['v_oll'], 'r0l')
+        def st():
+            vdiv('level', 64, 'v_oll'); x2(); vput('r0l', 'v_orr'); vconst('v_olr', 0); vconst('v_orl', 0)
+        def mo():
+            vdiv('level', 32, 'v_oll'); x2()
+            for n_ in ('v_olr', 'v_orl', 'v_orr'): vput('r0l', n_)
+        vif('out_mode', st, mo)
+        # every word: e0 = coef << 8 | the word's shift, r0 = its address
+        a.mov_l_imm('mx2_atab', 4); a.mov_l_imm('mx2_vix', 5); a.mov_l_imm('mx2_sh', 3); a.mov_w_imm(len(VOX_NAMES), 2)
+        a.label('mx2_wl')
+        a.mov_w_ld(5, 0); a.extu_l(0); a.mov_l_imm(VVAL, 1); a.add_l_rr(0, 1)        # its VVAL slot
+        a.mov_b_ld(1, 'r0h'); a.mov_b_ld(3, 'r0l')
+        a.push_l(2); a.push_l(3); a.push_l(4); a.push_l(5)
+        a.mov_w_rr(0, 8); a.mov_w_ld(4, 0); a.jsr('own_coef')
+        a.pop_l(5); a.pop_l(4); a.pop_l(3); a.pop_l(2)
+        a.adds1(3); a.adds1(4); a.adds1(4); a.adds1(5); a.adds1(5)
+        a.dec_w1(2); a.bne16('mx2_wl')
+        a.pop_l(6); a.pop_l(5); a.pop_l(4); a.pop_l(3); a.pop_l(2)
+        a.rts()
+        S = {t_: j for j, t_ in enumerate(VHB_SLOTS)}           # ---- one half-band: er6 = its VVAL block ----
+        def bput(reg, slot): a.mov_b_st_disp(reg, S[slot], 6)
+        a.label('mx2_band')
+        a.mov_b_from_abs(VN, 'r0l'); a.mov_b_from_abs(VB_, 'r1l'); a.cmp_b_rr('r1l', 'r0l'); a.bls16('mx2_bi')
+        a.add_b_imm(0xFF, 'r0l'); a.mov_b_imm(V_.NHB, 'r2h'); a.mulxu_b('r2h', 0); a.extu_w(1); a.add_w_rr(1, 0)
+        a.extu_l(0); a.mov_l_imm('mx2_bidx', 1); a.add_l_rr(0, 1); a.mov_b_ld(1, 'r2l')   # r2l = k
+        a.mov_b_imm(0, 'r0l'); a.mov_b_from_abs(VF_, 'r0h'); a.btst_imm(1, 'r0h'); a.beq('mx2_bs')   # sounds:
+        a.mov_b_from_abs(VB_, 'r0l'); a.extu_w(0); a.extu_l(0); a.mov_l_imm(VX('vchar0'), 1); a.add_l_rr(0, 1)
+        a.mov_b_ld(1, 'r0l'); a.mov_b_imm(V_.LVG, 'r1l'); a.mulxu_b('r1l', 0); a.shll_w(0); a.mov_b_rr('r0h', 'r0l')
+        a.label('mx2_bs'); bput('r0l', 'lv'); a.bra('mx2_bk')
+        a.label('mx2_bi'); a.mov_b_imm(61, 'r2l'); a.mov_b_imm(0, 'r0l'); bput('r0l', 'lv')
+        a.label('mx2_bk')
+        a.mov_b_from_abs(VKR, 'r0l'); bput('r0l', 'kr'); a.mov_b_from_abs(VKAR, 'r0l'); bput('r0l', 'ka')
+        vfg('r2l'); a.mov_b_imm(0, 'r3h'); a.bsr16('mx2_bt')                       # modulator terms
+        vui('formant'); a.extu_w(0); a.mov_b_rr('r2l', 'r1l'); a.extu_w(1); a.add_w_rr(1, 0)
+        a.add_w_imm(-24 & 0xFFFF, 0); a.cmp_w_imm(0x8000, 0); a.bcs('mx2_b1'); a.mov_w_imm(0, 0)
+        a.label('mx2_b1'); a.cmp_w_imm(V_.KG - 1, 0); a.bls('mx2_b2'); a.mov_w_imm(V_.KG - 1, 0)
+        a.label('mx2_b2'); vfg('r0l'); a.mov_b_imm(10, 'r3h')                      # carrier terms (slots + 10)
+        a.label('mx2_bt')                                       # r5 = F, r3h = slot offset (0 m / 10 c)
+        a.mov_w_from_abs(VQ, 1); a.mov_w_rr(5, 0); a.mulxu_w(1, 0)
+        for _ in range(7): a.shlr_l2(0)
+        a.cmp_w_imm(16383, 0); a.bls('mx2_b3'); a.mov_w_imm(16383, 0)
+        a.label('mx2_b3'); a.mov_w_rr(0, 4)                                        # r4 = f q
+        a.push_l(6); a.mov_b_rr('r3h', 'r0l'); a.extu_w(0); a.extu_l(0); a.add_l_rr(0, 6)   # er6 += path offset
+        def tput(slot, src, neg, zero_if=None):                 # one term: 15-bit pair or 8-bit, by VF_ bit 2
+            z_, c_, e_ = uniq('mx2z'), uniq('mx2y'), uniq('mx2w')
+            if zero_if is not None:
+                a.mov_b_from_abs(VF_, 'r0l'); a.btst_imm(0, 'r0l'); (a.bne if zero_if else a.beq)(z_)
+            a.mov_w_rr(src, 0)
+            a.mov_b_from_abs(VF_, 'r1l'); a.btst_imm(2, 'r1l'); a.beq(c_)
+            if neg: vneg()
+            a.mov_w_rr(0, 1); a.shll_w(1); bput('r1h', 'm' + slot); a.and_b_imm(0x7F, 'r0l'); bput('r0l', 'm' + slot + 'l')
+            a.bra(e_)
+            a.label(c_); ok_ = uniq('mx2c'); a.add_w_imm(64, 0); a.shll_w(0); a.cmp_b_imm(127, 'r0h'); a.bls(ok_)
+            a.mov_b_imm(127, 'r0h')
+            a.label(ok_)
+            if neg: a.not_b('r0h'); a.inc_b('r0h')
+            bput('r0h', 'm' + slot)
+            if zero_if is not None:
+                a.bra(e_); a.label(z_); a.mov_b_imm(0, 'r0l'); bput('r0l', 'm' + slot); bput('r0l', 'm' + slot + 'l')
+            a.label(e_)
+        tput('f', 5, False); tput('g', 4, True); tput('a', 4, False, zero_if=True); tput('n', 5, True)
+        tput('b', 4, False, zero_if=False)                     # (even half-bands: a scratch slot)
+        a.pop_l(6); a.rts()
     a.label('mfx_guard')                                        # idle: MFX on -> our program in DSP1 (after KEYS too)
     a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.beq('mfg_x')
     a.mov_b_from_abs(KACTIVE, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfg_x')
     a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('mfg_x')
+    a.mov_b_from_abs(MON, 'r0l'); a.cmp_b_imm(2, 'r0l'); a.bne('mfg_m')         # v2.0 VOICE: reload after KEYS
+    a.mov_b_from_abs(KLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfg_v')
+    a.mov_b_from_abs(VLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfg_x')
+    a.label('mfg_v'); a.bsr16('mx2_load'); a.bra16('mfx_route')
+    a.label('mfg_m')
     a.mov_b_from_abs(MLOADED, 'r0l'); a.cmp_b_imm(0, 'r0l'); a.bne('mfg_x')
     a.bsr16('mfx_load'); a.bsr16('mfx_route')
     a.label('mfg_x'); a.rts()
+    voice_code()
     a.label('mfx_padleds')                                      # FX SWITCH shown: pads 1-3 lit = slot on
     a.mov_b_from_abs(PAGE, 'r0l'); a.cmp_b_imm(P_MFX, 'r0l'); a.bne('mfp_off')
     a.mov_w_from_abs(CUR_SCREEN, 0); a.cmp_w_imm(SCREEN, 0); a.bne('mfp_off')
@@ -4394,6 +4662,46 @@ def build():
         w_ = MFX_PARAMS['m0_%s' % n_][1]
         a.raw(bytes((M_.VI[v_], 0xFF if sh_ is None else M_.VI[sh_], (MFX_PROG[w_] >> 8) & 3)))
     a.label('mf_mdef'); a.raw(bytes(x for d in M_.MODE_DEFAULT for x in d))   # MOD MODE -> (RATE, DEPTH, P4-P6)
+    V_ = vocdsp                                                 # ---- v2.0 VOICE tables (vocdsp) ----
+    def b8(xs): a.raw(bytes(x & 0xFF for x in xs))
+    a.align2()
+    a.label('mf_eng')
+    for i in range(3): a.dc_l('s_mfe%d' % i)
+    a.label('mx2_pre')
+    for i in range(len(V_.PRESET_NAMES)): a.dc_l('s_mfv%d' % i)
+    a.label('mx2_flt'); a.dc_l('s_mfk0'); a.dc_l('s_mfk1')
+    a.label('mx2_out'); a.dc_l('s_mfu0'); a.dc_l('s_mfu1')
+    a.label('mx2_hz10'); a.raw(struct.pack('>201H', *[10 * v for v in range(201)]))
+    a.label('mx2_hz100'); a.raw(struct.pack('>201H', *[100 * v for v in range(201)]))
+    a.label('mx2_mfhz'); a.raw(struct.pack('>128H', *[int(round(V_.mf_hz(v))) for v in range(128)]))
+    a.label('mx2_fg'); a.raw(struct.pack('>%dH' % V_.KG, *V_.TAB_FG))
+    a.label('mx2_mf'); a.raw(struct.pack('>128H', *V_.TAB_MF))
+    a.label('mx2_qm8'); a.raw(struct.pack('>161H', *V_.TAB_QM8))
+    a.label('mx2_qb'); a.raw(struct.pack('>%dH' % (2 * V_.NHB), *[x for fo in V_.TAB_QB for x in fo]))
+    a.label('mx2_qw'); a.raw(struct.pack('>101H', *V_.TAB_QW))
+    a.label('mx2_vix'); a.raw(b''.join(struct.pack('>H', VVI[n_]) for n_ in VOX_NAMES))
+    a.label('mx2_eqm'); a.raw(struct.pack('>625h', *[x for o in V_.TAB_EQM for x in o]))
+    a.label('mx2_atab'); a.raw(b''.join(struct.pack('>H', 0x1000 | (VOX_PARAMS[n_][1] << 2)) for n_ in VOX_NAMES))
+    a.label('mx2_sh'); a.raw(bytes((VOX_PROG[VOX_PARAMS[n_][1]] >> 8) & 3 for n_ in VOX_NAMES))
+    a.label('mx2_bidx'); b8([x for row in V_.TAB_BIDX for x in row])
+    a.label('mx2_ka'); b8(V_.TAB_KA)
+    a.label('mx2_kr'); b8(V_.TAB_KR)
+    a.label('mx2_nsr'); b8(V_.TAB_NSR)
+    a.label('mx2_nst'); b8(V_.TAB_NST)
+    a.label('mx2_lmt'); b8(V_.TAB_LMT)
+    a.label('mx2_lmrel'); b8([x for t in V_.TAB_LMREL for x in t])
+    a.label('mx2_lmv'); b8(V_.TAB_LMV)
+    a.label('mx2_dsl'); b8([x for t in V_.TAB_DSL for x in t])
+    a.label('mx2_dst'); b8(V_.TAB_DST)
+    a.label('mx2_e0'); b8([x for t in V_.TAB_E0 for x in t])
+    a.label('mx2_e2'); b8([x for t in V_.TAB_E2 for x in t])
+    a.label('mx2_eqx'); b8([x for o in V_.TAB_EQX for x in o])
+    a.label('mx2_eql'); b8([x for o in V_.TAB_EQL for x in o])
+    a.label('mx2_eqh'); b8([x for o in V_.TAB_EQH for x in o])
+    a.label('mx2_hpl'); b8([x for t in V_.TAB_HPL for x in t])
+    a.label('mx2_pan'); b8([x for t in V_.TAB_PAN for x in t])
+    a.label('mx2_pret'); b8([V_.preset_ui(i)[k] for i in range(len(V_.PRESET_NAMES)) for k in V_.UI_KEYS])
+    a.align2()
     a.label('mf_fmix'); a.raw(bytes(x for m in M_.TAB_FMIX for x in m))
     a.label('mf_phw'); a.raw(bytes(M_.TAB_PHW)); a.align2()
     a.label('mf_fman'); a.raw(struct.pack('>128H', *M_.TAB_FMAN))
@@ -4478,6 +4786,12 @@ def main(raw, outdir):
     tab = keysdsp.rom_table(MFX_PROG)                          # MFX: same layout (from word 0x3C)
     o = MFX_BASE - 0x100000
     assert not any(img[o:o + len(tab)]), 'MFX table flash not empty'
+    img[o:o + len(tab)] = tab
+    assert MFX_BASE + len(tab) <= VOX_BASE
+    tab = keysdsp.rom_table(VOX_PROG)                          # v2.0 VOICE: same layout (MFX lane)
+    o = VOX_BASE - 0x100000
+    assert not any(img[o:o + len(tab)]), 'VOICE table flash not empty'
+    assert VOX_BASE == 0x1B9200 and VOX_BASE + len(tab) <= 0x1B9B00 < 0x1C0000, 'VOICE table: 0x1B9200-0x1B9AFF (ledger)'
     img[o:o + len(tab)] = tab
 
     def patch_screen(idx, want_handler, new_handler, params=None, page=None):

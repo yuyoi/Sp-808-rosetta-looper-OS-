@@ -272,6 +272,37 @@ Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note f
   pad hit still picks a source.
 
 #### Lane MFX: effect modes and sound
+- **2026-10-22: VOICE = Narrator voice chain + vocoder (ENGINE row OFF / MFX / VOICE).** User: "open ex os and grab how
+  they did theirs and make one thats better"; Narrator chain rebuilt + vocoder, "separate fx working together".
+  Emulator-tested, NOT on hw.
+  - **EX 1.001 findings** (sp808ex_v1001_raw.bin): FX pointer table 0x17C456 (25 algorithms), lengths 0x161EDE;
+    algorithm -> block table 0x16D618 (8 bytes each: count + block indices); block records 0x16D6F8 + 0x18 (i - 1)
+    (short / long name, param count, param list pointer); param records 0x1E bytes (name, min / max at +18).
+    fx20 VoiceTrans + EQ + SimpleDelay, fx21 MicSim, **fx22 Vocal Multi** (NS, Limiter / de-esser, Enhancer, 3-band EQ,
+    PitchShifter, Delay, Chorus), fx23 Guitar Multi, **fx24 Vocoder(10) + Stereo Delay** (vocoder params: Envelope,
+    Pan, Hold, Mic Sens, Synth In, V.Char 1-10, MicMix Lev / Pan / HPF). Presets 0xB2 bytes, last word = algorithm,
+    block switches = the 7 header words before the params. **"VO:Narrat." is a Vocal Multi preset** (only Limiter
+    +12 / -24 dB / rel 90 / DES 30 @ 50 and EQ low -3 @10, mid +6 @20 Q 20, high +3 @50 on), not a vocoder one; the
+    only vocoder presets are VC:Mono / VC:Stereo (Mic 80, Synth 80, all bands 70). Roland's vocoder DSP: 10 bands,
+    ~55 words each, cascaded 2-pole band-passes (15-bit coefs), abs -> attack / release via op 0x50 skip -> mc0 VCA.
+  - **Ours (tools/vocdsp.py, own program, words 0x3C-0x2E6):** modulator = FX send L (mic / LINE L), carrier = FX
+    send R (pads / LINE R; the lead's ROUTING preset "VOCODER" sets the send pans). Chain: NS (fast-attack / RELEASE
+    detector, de-clicked gate), limiter (feedback AGC, 15-bit release) + de-esser and enhancer sharing one high band,
+    EQ = low / high one-pole shelves + mid SVF peak. Vocoder: 14 half-bands = 14 bands 2-POLE or 7 bands 4-POLE (pairs
+    in series by parity), formant shift (carrier band index + semitones), RESO, ATTACK / RELEASE / HOLD, a level per
+    band, mic mix with HPF, MONO / STEREO (bands L R R L ..). Slots 2 / 3 pass through (no routing change).
+  - Fit: DSP1 = 678 words; chain ~117 + ~40 per half-band (15-bit pairs) -> 12; 8-bit coefficients for the upper
+    half-bands (>= ~1.2 kHz, < 1 semitone error) -> 14 (10 words left). Band input scaled by q (unity peak gain) so
+    BAND n is just a level; envelope at 1/64 scale so 8-bit rates reach k = 1/8192.
+  - Host: vocdsp.values() is integer table math the H8 mirrors exactly (mx2_apply writes all 286 words; band math in
+    one routine over a 23-slot VVAL block per half-band). VVAL reuses MFX's MSHAD / MVAL area (never both loaded),
+    UI bytes VUI 0xDC0. VOICE program table 0x1B9200 (ledger). Blob +24 KB (138.6 KB).
+  - Shared engine touched: `a.jmp('d_flush')` instead of bra16 (the Mac page draw code passed 32 KB), and a new row
+    display 'sgn' (signed dB / semitones).
+  - Model tests (vocdsp.py --test): mod 300 Hz -> 330 Hz harmonic 47x the 2530 Hz one; formant +12 moves it to 660;
+    4-POLE as selective; release ~40 ms; HOLD keeps the level; NARRATOR EQ +6 dB @ 200 Hz; limiter -12 dB in -> ~thr;
+    de-esser 8 kHz 0.39 vs 1 kHz 0.9; NS gates -60 dB to 0.1.
+  - Queued after this (user): visual MFX page (chain drawn as boxes), "seriously advanced" reverse delay.
 - **2026-10-21: CHORUS / FLANGER / PHASER moved into MOD** (user on v1.98: "those can be in the mod tab"; "add as
   many rows as you need, scrolling is fine"; old TYPEs removed; the Rosetta rule: a row per real param, nothing
   hard-wired). MODE = TREMOLO AUTO-PAN RING CHORUS FLANGER PHASER, rows RATE / DEPTH + P4-P6, labels by mode (ML4):
