@@ -90,13 +90,30 @@ def run(upd, outdir, disk=None, log=print):
 def gui():
     import tkinter as tk
     from tkinter import filedialog, messagebox, scrolledtext
+    try: __import__('ctypes').windll.shell32.SetCurrentProcessExplicitAppUserModelID('Rosetta.Patcher.SP808')
+    except Exception: pass                            # own taskbar entry (not "Python"), so it shows our icon
+    try: __import__('ctypes').windll.shcore.SetProcessDpiAwareness(1)
+    except Exception: pass                            # crisp text and icons on scaled displays
     BG, PANEL, BLUE, GREEN, TXT = '#05080c', '#0d141c', '#2ec4ff', '#39ff88', '#cfeee0'
     root = tk.Tk(); root.title('Rosetta Patcher - SP-808'); root.geometry('660x460'); root.configure(bg=BG)
     base = getattr(sys, '_MEIPASS', os.path.join(HERE, '..'))
     for ico in (os.path.join(base, 'tools', 'rosetta_patcher.ico'), os.path.join(HERE, 'rosetta_patcher.ico')):
         if os.path.exists(ico):
-            try: root.iconbitmap(default=ico)            # default= : the taskbar too
+            try: root.iconbitmap(default=ico)
             except tk.TclError: pass
+            try:                                      # Windows: hand the exact big / small sizes it wants (DPI aware)
+                import ctypes
+                u = ctypes.windll.user32; root.update_idletasks()
+                u.LoadImageW.restype = ctypes.c_void_p
+                u.LoadImageW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_uint, ctypes.c_int, ctypes.c_int, ctypes.c_uint]
+                u.SendMessageW.argtypes = [ctypes.c_void_p, ctypes.c_uint, ctypes.c_size_t, ctypes.c_void_p]
+                hwnd = int(root.wm_frame(), 16)
+                dpi = u.GetDpiForWindow(hwnd) if hasattr(u, 'GetDpiForWindow') else 96
+                for which, metric in ((1, 11), (0, 49)):       # ICON_BIG = SM_CXICON, ICON_SMALL = SM_CXSMICON
+                    sz = u.GetSystemMetricsForDpi(metric, dpi) if hasattr(u, 'GetSystemMetricsForDpi') else u.GetSystemMetrics(metric)
+                    h = u.LoadImageW(None, ico, 1, sz, sz, 0x10)   # IMAGE_ICON, LR_LOADFROMFILE: picks that size
+                    if h: u.SendMessageW(hwnd, 0x80, which, h)     # WM_SETICON
+            except Exception: pass
             break
     tk.Label(root, text='ROSETTA OS  //  SP-808 PATCHER', bg=BG, fg=GREEN, font=('Consolas', 15, 'bold')).grid(
         row=0, column=0, columnspan=3, sticky='w', padx=10, pady=(10, 2))
