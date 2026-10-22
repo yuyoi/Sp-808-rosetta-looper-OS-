@@ -157,7 +157,7 @@ def main(image_path, out):
     if params(0)[3] != 50: fails.append('knob P4')
     shots.append(('CONTROLS: KNOB A -> SLOT 1 P4', sim.shot()))
     # ---- KEYS takes DSP1: every group cleared; back: everything again ----
-    sim.key(bm.K_EXIT); sim.run(5)
+    sim.key(bm.K_EXIT); sim.key(bm.K_EXIT); sim.run(5)          # tab -> tab list -> home (v1.99b)
     e.wb(bm.CUR, [t for t, _ in bm.TILES].index('keys')); sim.key(bm.K_ENTER); sim.run(30)
     left = [(k, n) for k in range(3) for n in ('ew', 'er0', 'er1', 'es0', 'es1') if eram(k, n)]
     print('KEYS       MLOADED', e.rb(bm.MLOADED), 'MFX groups still set:', left, '(expect [])')
