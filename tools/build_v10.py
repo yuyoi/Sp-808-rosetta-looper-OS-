@@ -438,7 +438,9 @@ RT_LOC_NAMES = ['SEND/RETURN', 'INS MASTER', 'INS RECORD', 'INS AUX-OUT', 'MIC/L
                 'TR.D PRE-EQ', 'TR.D POST-EQ', 'FX PATCH', 'OFF']
 RT_LOC_CODES = [1, 12, 13, 14, 10, 11, 2, 3, 4, 5, 6, 7, 8, 9, None, 0]        # mixer code per index (None: the patch's)
 RT_PRESETS = [('CUSTOM', None), ('DRY', 15), ('INPUT FX', 5), ('LOOP FX', 0), ('MASTER FX', 1), ('REC FX', 2),
-              ('FX PATCH', 14)]                                              # (name, FX LOCATION index)
+              ('FX PATCH', 14), ('VOCODER', 0)]                              # (name, FX LOCATION index)
+# VOCODER (v1.99b, for the MFX lane's VOICE page): FX send/return, the input channel's FX send panned hard L (the voice /
+# modulator), the 4 pad tracks' FX sends hard R (the carrier). Mixer index 17 = send-2 level, 18 = send-2 pan (0 L, 127 R).
 RT_TRK = ['TRACK A', 'TRACK B', 'TRACK C', 'TRACK D', 'INPUT']
 def mxi(label, g, i, disp=('n',)): return (label, mx(g, i), 0, 127, 'mx_%d_%d' % (g, i), disp)
 ROUTE_TABS = [
@@ -3749,6 +3751,11 @@ def build():
         if nm_ == 'LOOP FX':                                    # send/return: tracks send, the input stays dry
             for g_, v_ in ((0, 100), (1, 100), (2, 100), (3, 100), (4, 0)):
                 a.mov_w_imm(v_, 1); a.mov_w_imm(17, 8); a.mov_w_imm(g_, 0); a.jsr(MIXER_PARAM)
+            a.mov_w_imm(100, 1); a.mov_w_imm(6, 8); a.mov_w_imm(6, 0); a.jsr(MIXER_PARAM)
+        if nm_ == 'VOCODER':                                    # voice (input) -> send L, pads (tracks) -> send R
+            for g_ in range(5):
+                a.mov_w_imm(100, 1); a.mov_w_imm(17, 8); a.mov_w_imm(g_, 0); a.jsr(MIXER_PARAM)
+                a.mov_w_imm(0 if g_ == 4 else 127, 1); a.mov_w_imm(18, 8); a.mov_w_imm(g_, 0); a.jsr(MIXER_PARAM)
             a.mov_w_imm(100, 1); a.mov_w_imm(6, 8); a.mov_w_imm(6, 0); a.jsr(MIXER_PARAM)
         a.mov_b_imm(loc_, 'r0l'); a.mov_b_to_abs('r0l', MIXER_LOC_IDX); a.bra16('rt_loc2')
         a.label(nx_)

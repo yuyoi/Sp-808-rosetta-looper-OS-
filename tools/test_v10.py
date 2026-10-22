@@ -392,7 +392,7 @@ def main(image_path, out):
     for _ in range(16): sim.key(bm.K_LEFT)                     # SAW 0
     print('v1.9 restored: tab %d SAW %d LA %d DECAY %d SUS %d FENV %d wet %d' % (e.rb(bm.KDTAB), e.rb(bm.KMXSAW), e.rb(bm.KLAA),
           e.rb(bm.KDEC), e.rb(bm.KSUS), e.rb(bm.KFENV), cf('flt_wet')))
-    sim.key(bm.K_EXIT); sim.run(10); print('EXIT -> page %d CUR %d' % (e.rb(bm.PAGE), e.rb(bm.CUR)))
+    sim.key(bm.K_EXIT); sim.key(bm.K_EXIT); sim.run(10); print('EXIT x2 (tab list, home) -> page %d CUR %d' % (e.rb(bm.PAGE), e.rb(bm.CUR)))
     sim.key(bm.K_LEFT)
     sim.key(bm.K_LEFT); sim.key(bm.K_ENTER); sim.run(20)                     # back to KEYS
     # leaving KEYS without EXIT (mode keys): the master routing must come back, KEYS re-arms on return

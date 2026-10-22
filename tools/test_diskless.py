@@ -30,6 +30,12 @@ def main(image_path):
     p1, m1 = e.rb(bm.PAGE), e.rb(bm.KDMENU); sim.key(bm.K_EXIT); sim.run(5)
     print('ROUTING    page %d -> EXIT: page %d tab list %d -> EXIT: page %d tab list %d (expect %d, %d 1, 0 0)' % (
         p0, p1, m1, e.rb(bm.PAGE), e.rb(bm.KDMENU), bm.P_ROUTE, bm.P_ROUTE))
+    # ROUTING preset VOCODER: input send hard L, tracks' sends hard R, send/return
+    e.stubs[bm.FX_LOC_APPLY] = lambda e: None
+    del sim.routing[:]; e.wb(bm.RPRE, [n for n, _ in bm.RT_PRESETS].index('VOCODER')); sim.call('rt_preset')
+    pans = {g: v for _, g, i, v in sim.routing if i == 18}; lv = {g: v for _, g, i, v in sim.routing if i == 17}
+    print('VOCODER    send pans %s levels %s FX loc idx %d (expect input 4 -> 0 = L, tracks 0-3 -> 127 = R, 100s, 0)' % (
+        pans, lv, e.rb(bm.MIXER_LOC_IDX)))
     print('odd word/long accesses:', ['pc %06X @%06X' % x for x in sorted(e.odd)] or 'none')
 
 
