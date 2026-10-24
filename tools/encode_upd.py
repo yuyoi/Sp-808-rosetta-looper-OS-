@@ -111,6 +111,15 @@ def extras(folder, tracks, new):
     roland, _ = decode_upd.decode(folder)
     covered = coverage(tracks)
     ch = [o for o in range(SIZE) if not covered[o] and new[o] != roland[o]]
+    if len(ch) > 4096:                           # whole blocks (Rosetta's code, boot anim, DSP tables): the boot ROM
+        full = []                                # leaves unsent bytes 0xFF, so zeros inside a block must be sent too.
+        for o in ch:                             # Changed spans with gaps < 4 KB merged, end rounded up to 256 bytes.
+            if full and o - full[-1][1] < 4096: full[-1][1] = o + 1
+            else: full.append([o, o + 1])
+        ch = []
+        for s, e in full:
+            e = min(-(-e // 256) * 256, SIZE)
+            ch += [o for o in range(s, e) if not covered[o]]
     out, i = [], 0
     while i < len(ch):
         s = ch[i]; j = i
