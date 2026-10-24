@@ -462,7 +462,14 @@ ADC_TAB, ADC_N, SWNAMES, SWCODES, SW_N = 0x426CBE, 14, 0x15F9E8, 0x16414C, 67
 LAB_CH_NAMES = ['FADER A', 'FADER B', 'FADER C', 'FADER D', 'FADER 5?', 'FADER 6?', 'PARA-A', 'PARA-B', 'PARA-C',
                 'BEAM L', 'BEAM R', 'FOOT SW', '', '']                    # (CONTROLS.md; 4/5/12/13 to confirm on hw)
 LAB_TABS = [('ANALOG INPUTS', 'lab_an'), ('BUTTONS', 'lab_bt'), ('LED SHOW', 'lab_ld'), ('LCD ICONS', 'lab_sg'),
-            ('PAD VU METER', 'lab_vu')]
+            ('PAD VU METER', 'lab_vu'),
+            # v2.00b DISK INFO (CF support research): what the boot ROM detected on the IDE port. Drive struct 0x401000:
+            # +0x14 type (0 = ATA disk: a CF card / hard disk, 1 = ATAPI: the Zip), +1 present, +6 heads, +8 sectors,
+            # +0x0A capacity in sectors, +0x1E error word. Testers photograph this with a CF adapter fitted.
+            ('DISK INFO', [('TYPE', 0x401014, 0, 0, 'ro', ('s', 'lb_dtyp', 2)), ('PRESENT', 0x401001, 0, 0, 'ro', ('n',)),
+                           ('SIZE', 0x40100A, 0, 0, 'ro', ('cap',)), ('HEADS', 0x401007, 0, 0, 'ro', ('n',)),
+                           ('SECTORS/TRK', 0x401009, 0, 0, 'ro', ('n',)), ('ERROR', 0x40101F, 0, 0, 'ro', ('n',)),
+                           ('BUSY', 0x401000, 0, 0, 'ro', ('n',))])]
 # LCD ICONS: the 7-segment line = 2 rows x 12 words in the boot ROM's LCD RAM (row 0 at 0x40187A, row 1 at 0x401892,
 # streamed by the LCD interrupt). 25 digits use 4-bit groups (type 0 bits 13-10, type 1 bits 9-8 + 5-4, type 2 bits
 # 3-0; boot ROM tables 0xA226 types / 0xA23F word offsets); the other 184 bits are never written by a digit: hidden
@@ -651,7 +658,7 @@ for P_ in MAC_PAGES:
     MAC_STRS += [('s_%si%d_%d_%d' % (P_['pid'], ti, i, t), nm) for ti, (_, items) in enumerate(P_['tabs'])
                  if not isinstance(items, str) for i, it in enumerate(items) if isinstance(it[0], tuple)
                  for t, nm in enumerate(it[0][2])]
-MAC_STRS += [('s_lbc%d' % i, n) for i, n in enumerate(LAB_CH_NAMES)]
+MAC_STRS += [('s_lbc%d' % i, n) for i, n in enumerate(LAB_CH_NAMES)] + [('s_dty0', 'ATA (CF/HD)'), ('s_dty1', 'ATAPI (ZIP)')]
 MAC_STRS += [('s_lfw%d' % i, n) for i, n in enumerate(LFO_WAVES)] + [('s_arm%d' % i, n) for i, n in enumerate(ARP_MODES)]
 MAC_STRS += [('s_vmn%d' % i, n) for i, n in enumerate(VM_NAMES)]
 MAC_STRS += [('s_lfr%d' % i, ('%g' % hz) + 'HZ') for i, hz in enumerate(LFO_HZ)]
@@ -1266,6 +1273,10 @@ def build():
             a.label(ok); a.extu_w(0); a.extu_l(0); a.shll_l2(0); a.mov_l_imm(disp[1], 2); a.add_l_rr(0, 2)
             a.mov_l_ind(2, 2); a.bsr16('row_str')
             a.label(end)
+        elif disp[0] == 'cap':                                  # long sectors @var -> MB (>> 11)
+            a.push_l(2); a.mov_l_from_abs(var, 2)
+            for _ in range(5): a.shlr_l2(2)
+            a.shlr_l(2); a.mov_w_rr(2, 0); a.pop_l(2); a.bsr16('fmt_u'); row_put('MB')
         elif disp[0] == 'n7': a.mov_b_from_abs(var, 'r0l'); a.and_b_imm(0x7F, 'r0l'); a.extu_w(0); a.bsr16('fmt_u')
         elif disp[0] == 'sgn':                                  # v2.0 (MFX lane): byte - offset, signed, + unit
             ng_, en_ = uniq('dsn'), uniq('dsg')
@@ -4741,6 +4752,7 @@ def build():
     for i in range(len(LAB_CH_NAMES)): a.dc_l('s_lbc%d' % i)
     a.label('rt_pren')
     for i in range(len(RT_PRESETS)): a.dc_l('s_rtp%d' % i)
+    a.label('lb_dtyp'); a.dc_l('s_dty0'); a.dc_l('s_dty1')
     a.align2()
     a.label('f_hi'); a.raw(bytes(F_HI)); a.label('f_lo'); a.raw(bytes(F_LO))
     a.label('q_hi'); a.raw(bytes(Q_HI)); a.label('q_lo'); a.raw(bytes(Q_LO))

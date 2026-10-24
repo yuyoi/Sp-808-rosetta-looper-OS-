@@ -36,6 +36,16 @@ def main(image_path):
     pans = {g: v for _, g, i, v in sim.routing if i == 18}; lv = {g: v for _, g, i, v in sim.routing if i == 17}
     print('VOCODER    send pans %s levels %s FX loc idx %d (expect input 4 -> 0 = L, tracks 0-3 -> 127 = R, 100s, 0)' % (
         pans, lv, e.rb(bm.MIXER_LOC_IDX)))
+    # LAB > DISK INFO: a CF card as the boot ROM sees it (type 0 = ATA), 2 GB, 16 heads, 63 sectors
+    e.wb(0x401014, 0); e.wb(0x401001, 1); e.wl(0x40100A, 4000000); e.ww(0x401006, 16); e.ww(0x401008, 63)
+    e.ww(0x40101E, 0); e.wb(0x401000, 0)
+    e.wb(bm.PAGE, bm.P_HOME); sim.call('menu', 0); sim.run(5)
+    e.wb(bm.CUR, [t for t, _ in bm.TILES].index('lab')); sim.key(bm.K_ENTER); sim.run(10)
+    e.wb(bm.LTAB, [d for d, _ in bm.LAB_TABS].index('DISK INFO')); e.wb(bm.LCURX, 0); e.wb(bm.KDMENU, 0)
+    sim.call('draw'); sim.run(10)
+    rows = [''.join('#' if v else '.' for v in r) for r in sim.shot().px]
+    print('DISK INFO  tab drawn, ink pixels %d (expect > 0); screen:' % sum(r.count('#') for r in rows))
+    for r in rows: print('  ' + r)
     print('odd word/long accesses:', ['pc %06X @%06X' % x for x in sorted(e.odd)] or 'none')
 
 
