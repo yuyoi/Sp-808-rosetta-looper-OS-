@@ -1,9 +1,10 @@
 """Rosetta Patcher: turn Roland's own SP-808 OS 1.05 update into SP-808 Rosetta OS (SP808.PRG), optionally straight
 into a Zip / ZuluIDE disk image. Roland's code is never shipped: you bring SP808v1050.zip (or its SP808#1-8.MID
-files, or an already decoded sp808_v1050_raw.bin).
+files, or an already decoded sp808_v1050_raw.bin). CF beta (cf_patch.py): plain CF cards on an IDE adapter, on Rosetta
+or on Roland's stock OS (1.05, or SP808EXv1001.zip for the EX).
 
 window:        python tools/rosetta_patcher.py
-command line:  python -I tools/rosetta_patcher.py --upd SP808v1050.zip --out outdir [--img disk.img]
+command line:  python -I tools/rosetta_patcher.py --upd SP808v1050.zip --out outdir [--img disk.img] [--cf] [--stock]
 The disk image gets a .bak first, and the PRG is read back and compared after writing.
 """
 import argparse, hashlib, io, os, queue, shutil, sys, tempfile, threading, zipfile
@@ -34,15 +35,27 @@ def load_update(path, log=print):
     return img
 
 
-def check_image(img, log=print):
+def check_image(img, log=print, stock=False):
     import struct
     ver = struct.unpack('>H', img[0x0E:0x10])[0]
-    if ver != 1050:
-        raise ValueError('this is OS version %d; Rosetta OS needs the SP-808 (non-EX) OS 1.05 (1050)' % ver)
-    log('Roland OS 1.05 found, sha256 %s' % hashlib.sha256(img[:0xC0000]).hexdigest()[:16])
+    if ver != 1050 and not (stock and ver == 1001):
+        raise ValueError('this is OS version %d; Rosetta OS needs the SP-808 (non-EX) OS 1.05 (1050)%s' % (
+            ver, '' if stock else ' (stock + CF beta also takes EX 1.001)'))
+    log('Roland OS %s found, sha256 %s' % ({1050: '1.05', 1001: 'EX 1.001'}[ver], hashlib.sha256(img[:0xC0000]).hexdigest()[:16]))
 
 
-def build(img, outdir, log=print):
+def build_stock_cf(img, outdir, log=print):
+    import cf_patch
+    out, name, old, new = cf_patch.stock(img)
+    os.makedirs(outdir, exist_ok=True)
+    prg = os.path.join(outdir, 'SP808.PRG')
+    data = cf_patch.prg(out)
+    open(prg + '.tmp', 'wb').write(data); os.replace(prg + '.tmp', prg)
+    log('stock %s + CF beta, version %d -> %d -> %s (sha256 %s)' % (name, old, new, prg, hashlib.sha256(data).hexdigest()[:16]))
+    return prg
+
+
+def build(img, outdir, log=print, cf=False):
     import build_v10 as bm
     os.makedirs(outdir, exist_ok=True)
     raw = os.path.join(outdir, '_roland_raw.bin')
@@ -56,7 +69,11 @@ def build(img, outdir, log=print):
         os.remove(raw)
     for line in out.splitlines()[:2]: log(line)
     prg = os.path.join(outdir, 'SP808.PRG')
-    log('Rosetta OS v%s -> %s (sha256 %s)' % (bm.VER_TXT, prg, hashlib.sha256(open(prg, 'rb').read()).hexdigest()[:16]))
+    if cf:
+        import cf_patch
+        cf_patch.patch_prg(prg)
+    log('Rosetta OS v%s%s -> %s (sha256 %s)' % (bm.VER_TXT, ' + CF beta' if cf else '', prg,
+                                                hashlib.sha256(open(prg, 'rb').read()).hexdigest()[:16]))
     try: os.remove(os.path.join(outdir, 'sp808_v10.bin'))       # keep only the PRG (Roland-derived either way)
     except OSError: pass
     return prg
@@ -77,13 +94,18 @@ def install(prg, disk, log=print):
     log('installed into %s (backup: %s.bak), read back OK' % (disk, disk))
 
 
-def run(upd, outdir, disk=None, log=print):
-    img = load_update(upd, log); check_image(img, log)
-    prg = build(img, outdir, log)
+def run(upd, outdir, disk=None, log=print, stock=False, cf=False):
+    if stock and not cf: raise ValueError('stock OS without CF beta: nothing to patch')
+    img = load_update(upd, log); check_image(img, log, stock)
+    prg = build_stock_cf(img, outdir, log) if stock else build(img, outdir, log, cf)
     if disk: install(prg, disk, log)
     log('done. On the SP-808: power on with the disk in, answer YES to "Update System?", power-cycle when it asks '
         'for the Zip (hold HOLD at power-on to force the prompt). Back up your disk first. Do not share the PRG: '
         'it contains Roland code; share the patcher instead.')
+    if cf:
+        log('CF beta: install from the Zip / ZuluIDE as usual, then swap in the CF adapter (card as master) with an '
+            'SP-808 disk image written to the card. Untested on hardware: please report back. An EX OS build is for '
+            'SP-808EX units only.')
     return prg
 
 
@@ -95,7 +117,7 @@ def gui():
     try: __import__('ctypes').windll.shcore.SetProcessDpiAwareness(1)
     except Exception: pass                            # crisp text and icons on scaled displays
     BG, PANEL, BLUE, GREEN, TXT = '#05080c', '#0d141c', '#2ec4ff', '#39ff88', '#cfeee0'
-    root = tk.Tk(); root.title('Rosetta Patcher - SP-808'); root.geometry('660x460'); root.configure(bg=BG)
+    root = tk.Tk(); root.title('Rosetta Patcher - SP-808'); root.geometry('680x500'); root.configure(bg=BG)
     base = getattr(sys, '_MEIPASS', os.path.join(HERE, '..'))
     for ico in (os.path.join(base, 'tools', 'rosetta_patcher.ico'), os.path.join(HERE, 'rosetta_patcher.ico')):
         if os.path.exists(ico):
@@ -127,18 +149,24 @@ def gui():
         tk.Entry(root, textvariable=var, width=60, **ent).grid(row=r, column=1, sticky='we', padx=4, ipady=3)
         tk.Button(root, text='...', command=pick, width=3, **btn_s).grid(row=r, column=2, padx=10)
     row(1, 'Roland update', v_upd, lambda: v_upd.set(filedialog.askopenfilename(
-        title='SP808v1050.zip, an SP808#1.MID or sp808_v1050_raw.bin',
+        title='SP808v1050.zip / SP808EXv1001.zip, an SP808#1.MID or a decoded .bin',
         filetypes=[('Roland update', '*.zip *.MID *.mid *.bin'), ('all', '*.*')]) or v_upd.get()))
     row(2, 'Output folder', v_out, lambda: v_out.set(filedialog.askdirectory() or v_out.get()))
     row(3, 'Disk image (optional)', v_img, lambda: v_img.set(filedialog.askopenfilename(
         title='Zip / ZuluIDE disk image', filetypes=[('disk image', '*.img *.ima *.hda'), ('all', '*.*')]) or v_img.get()))
     root.columnconfigure(1, weight=1)
-    tk.Label(root, text="You need Roland's own SP808v1050.zip (SP-808 OS 1.05). It is not included.", bg=BG,
+    tk.Label(root, text="You need Roland's own SP808v1050.zip (OS 1.05; stock EX + CF: SP808EXv1001.zip). Not included.", bg=BG,
              fg='#4f6b7a', font=('Consolas', 9)).grid(row=4, column=0, columnspan=3, sticky='w', padx=10)
+    v_stock, v_cf = tk.BooleanVar(value=False), tk.BooleanVar(value=False)
+    opt = tk.Frame(root, bg=BG); opt.grid(row=5, column=0, columnspan=3, sticky='w', padx=6)
+    chk = dict(bg=BG, fg=BLUE, selectcolor=PANEL, activebackground=BG, activeforeground=GREEN, font=('Consolas', 10))
+    tk.Radiobutton(opt, text='Rosetta OS', variable=v_stock, value=False, **chk).pack(side='left')
+    tk.Radiobutton(opt, text='Roland stock OS (1.05 / EX 1.001)', variable=v_stock, value=True, **chk).pack(side='left')
+    tk.Checkbutton(opt, text='CF card support (beta)', variable=v_cf, **chk).pack(side='left', padx=(16, 0))
     logw = scrolledtext.ScrolledText(root, height=14, bg=PANEL, fg=GREEN, insertbackground=GREEN, relief='flat',
                                      font=('Consolas', 9), highlightthickness=1, highlightbackground='#1b2a36')
-    logw.grid(row=6, column=0, columnspan=3, sticky='nsew', padx=10, pady=10)
-    root.rowconfigure(6, weight=1)
+    logw.grid(row=7, column=0, columnspan=3, sticky='nsew', padx=10, pady=10)
+    root.rowconfigure(7, weight=1)
     q = queue.Queue()
     def log(s): q.put(s)
     def pump():
@@ -155,13 +183,14 @@ def gui():
         if disk and not messagebox.askyesno('Rosetta Patcher', 'Write SP808.PRG into\n%s ?\n(a .bak copy is made first)' % disk):
             return
         btn.config(state='disabled')
+        stock, cf = v_stock.get(), v_cf.get()
         def work():
-            try: run(upd, v_out.get(), disk, log)
+            try: run(upd, v_out.get(), disk, log, stock, cf)
             except Exception as ex: log('ERROR: %s' % ex)
             log('__done__')
         threading.Thread(target=work, daemon=True).start()
-    btn = tk.Button(root, text='BUILD ROSETTA OS', command=go, height=2, width=24, **btn_s)
-    btn.config(fg=BG, bg=GREEN, activebackground=BLUE); btn.grid(row=5, column=0, columnspan=3, pady=6)
+    btn = tk.Button(root, text='BUILD', command=go, height=2, width=24, **btn_s)
+    btn.config(fg=BG, bg=GREEN, activebackground=BLUE); btn.grid(row=6, column=0, columnspan=3, pady=6)
     pump(); root.mainloop()
 
 
@@ -171,8 +200,10 @@ def main():
     ap.add_argument('--upd', required=True, help='SP808v1050.zip, the folder with SP808#1-8.MID, or a decoded .bin')
     ap.add_argument('--out', required=True, help='output folder for SP808.PRG')
     ap.add_argument('--img', help='optional Zip / ZuluIDE disk image to install into (a .bak is made)')
+    ap.add_argument('--cf', action='store_true', help='CF card support (beta): plain CF card on an IDE adapter')
+    ap.add_argument('--stock', action='store_true', help="Roland's stock OS (1.05 or EX 1.001) + --cf, no Rosetta")
     a = ap.parse_args()
-    run(a.upd, a.out, a.img)
+    run(a.upd, a.out, a.img, stock=a.stock, cf=a.cf)
 
 
 if __name__ == '__main__':

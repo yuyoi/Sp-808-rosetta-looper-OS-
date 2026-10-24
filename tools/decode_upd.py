@@ -12,6 +12,10 @@ usage: python -I tools/decode_upd.py <folder with SP808#1-8.MID> sp808_v1050_raw
 import os, sys
 
 
+HEADERS = (b'\x41\x00\x7C\x12',                                  # SP-808 (OS 1.05): Roland, dev 00, model 7C, DT1
+           b'\x41\x10\x00\x2B\x12')                              # SP-808EX (OS 1.001): dev 10, model 00 2B, DT1
+
+
 def vlq(b, i):
     v = 0
     while True:
@@ -43,9 +47,10 @@ def decode(folder):
     for n in range(1, 9):
         data = open(os.path.join(folder, 'SP808#%d.MID' % n), 'rb').read()
         for m in sysex(data):
-            if m[:4] != b'\x41\x00\x7C\x12' or m[-1] != 0xF7: continue
-            addr, body, ck = m[4:8], m[8:-2], m[-2]
-            assert (sum(m[4:-2]) + ck) & 0x7F == 0, 'checksum'
+            h = next((len(x) for x in HEADERS if m.startswith(x)), 0)
+            if not h or m[-1] != 0xF7: continue
+            addr, body, ck = m[h:h + 4], m[h + 4:-2], m[-2]
+            assert (sum(m[h:-2]) + ck) & 0x7F == 0, 'checksum'
             if addr[:3] != b'\x00\x00\x01': continue          # control message
             off = (body[0] << 12) | (body[1] << 8) | (body[2] << 4) | body[3]
             payload = unpack7(body[4:])

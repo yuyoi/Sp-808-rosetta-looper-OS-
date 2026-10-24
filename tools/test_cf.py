@@ -10,6 +10,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DUMP = os.path.join(HERE, '..', 'dump')
 
 
+IDLE = 0x4E0000                                                  # wait until the driver is idle (0x401000 = 0), as the OS
+IDLE_CODE = bytes.fromhex('6a2800401000' '46f8' '5470')            # does in 0x106142 before the next command
+
+
 def make(image, disk, profile, swap=False):
     card = ide_model.CFCard(bytearray(disk), ide_model.PROFILES[profile])
     e = ide_model.IdeEmu(image[:0xC0000], card, swap)
@@ -19,6 +23,7 @@ def make(image, disk, profile, swap=False):
     e.stubs[0x946C] = lambda e: None                             # boot ROM delay (timer poll): skip
     for v in (0x400210, 0x400214): e.stubs[v] = lambda e: None    # OS-installed mask save / restore (EXR ops)
     e.wb(0x401001, 0)                                            # no drive known yet (the dump had the Zip)
+    e.ram[IDLE - 0x400000:IDLE - 0x400000 + len(IDLE_CODE)] = IDLE_CODE
     return e, card
 
 
@@ -42,12 +47,27 @@ def main(image_path, disk_path, profile='generic-2gb'):
             e.er[7] = 0x43F000; e.push32(buf)
             e.er[0] = lba; e.s8(9, n)
             try:
-                e.call(0x16E8, sp=e.er[7], limit=5_000_000); r = 'ok'
+                e.call(0x16E8, sp=e.er[7], limit=5_000_000); e.call(IDLE, limit=5_000_000); r = 'ok'
             except RuntimeError as x:
                 r = 'stopped: %s' % x
             got = bytes(e.ram[buf - 0x400000:buf - 0x400000 + 512 * n])
             print('read       lba %6d n %2d: %s, error %04X, data == image: %s, card commands %s' % (
                 lba, n, r, e.rw(0x40101E), got == disk[lba * 512:(lba + n) * 512], ['%02X' % c[0] for c in card.log]))
+        for lba, n in ((5000, 1), (204100, 64)):                      # Roland's write (vector 0x4003AC -> ROM 0x1940)
+            buf = 0x4C0000
+            data = bytes((lba + i * 7 + (i >> 9)) & 0xFF for i in range(512 * n))
+            e.ram[buf - 0x400000:buf - 0x400000 + len(data)] = data
+            del card.log[:]
+            e.er[7] = 0x43F000; e.push32(buf)
+            e.er[0] = lba; e.s8(9, n)
+            try:
+                e.call(0x1940, sp=e.er[7], limit=5_000_000)              # returns once the first burst is going;
+                e.call(IDLE, limit=5_000_000); r = 'ok'                  # the rest runs in the IDE / DTC interrupts
+            except RuntimeError as x:
+                r = 'stopped: %s' % x
+            print('write      lba %6d n %2d: %s, error %04X, card == data: %s, card commands %s' % (
+                lba, n, r, e.rw(0x40101E), bytes(card.img[lba * 512:(lba + n) * 512]) == data,
+                ['%02X' % c[0] for c in card.log]))
 
 
 if __name__ == '__main__':

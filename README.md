@@ -115,6 +115,8 @@ Python 3 (`pip install numpy pillow`), double-click
 folder and, optionally, your Zip / ZuluIDE disk image. It builds `SP808.PRG` and can put it straight into the image
 (a `.bak` is made first, and the file is read back to check it). Command line:
 `python -I tools/rosetta_patcher.py --upd SP808v1050.zip --out outdir [--img disk.img]`.
+CF beta (untested on hardware, see the TODO list): add `--cf`, or `--stock --cf` with `SP808v1050.zip` or
+`SP808EXv1001.zip` for Roland's own OS + CF only (the EX build is for SP-808EX units).
 
 By hand: unzip `SP808#1.MID` .. `SP808#8.MID` into `upd/`, then:
 
@@ -256,10 +258,14 @@ Built, waiting for the card:
 - [ ] Stretch: an animation page with Hex Girl dancing, an uwu face mode and adjustable glitches.
 - [ ] Looper v2: 4 loops synced to loop 1, faders A-D, ASSIGN menu (single-switch mode), per-loop FX
   (plan in `LOOPER_DESIGN.md`).
-- [ ] **Plain CF cards (cheap IDE-to-CF adapters, e.g. StarTech 35BAYCF2IDE), in progress.** The SP-808 boot ROM already
-  has an ATA driver: in the emulator, a virtual CF card (`tools/ide_model.py`, `tools/test_cf.py`) is detected as ATA,
-  identified, and read sector-exact through Roland's own driver (interrupts + DTC modelled). Next: find where the OS
-  insists on an ATAPI Zip, then a patch for the stock SP-808EX OS too (a Rosetta Patcher option once it works). LAB >
-  DISK INFO shows what the unit detected, for testers.
+- [ ] **Plain CF cards (cheap IDE-to-CF adapters, e.g. StarTech 35BAYCF2IDE): CF beta, UNTESTED on hardware.** The
+  SP-808 boot ROM already has an ATA driver: in the emulator, a virtual CF card (`tools/ide_model.py`,
+  `tools/test_cf.py`) is detected, read and written sector-exact through Roland's own driver (interrupts + both DTC
+  channels modelled), and the OS disk check accepts it. The OS only trips on two Zip-only calls (an ATAPI MODE SELECT
+  in every disk check, an Iomega vendor command after many disk operations): a CF card rejects them and the driver
+  waits about a second each time. `tools/cf_patch.py` makes them return at once on a CF card (a Zip behaves as
+  before). It works on Rosetta and on Roland's stock OS 1.05 / SP-808EX 1.001 (source only for now, no new .exe yet).
+  To try it: write an SP-808 disk image raw onto the card, install from the Zip / ZuluIDE first, then swap in the
+  adapter (card as master). LAB > DISK INFO shows what the unit detected. Please report back on Discord.
 - [ ] Strip the groove/song screens.
 - [ ] Doom.

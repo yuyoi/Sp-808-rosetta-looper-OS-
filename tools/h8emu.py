@@ -25,6 +25,7 @@ class Emu:
         self.er = [0] * 8
         self.N = self.Z = self.V = self.C = 0
         self.I = self.H = 0
+        self.exr = 0x07                                      # EXR (interrupt mask bits 2-0)
         self.pc = 0
         self.stubs = {}
         self.steps = 0
@@ -228,6 +229,17 @@ class Emu:
                 s, d = (b3 >> 4) & 7, b3 & 7; a_, b_ = self.g32(d), self.g32(s)
                 v = {0x64: a_ | b_, 0x65: a_ ^ b_, 0x66: a_ & b_}[b2]
                 self.s32(d, v); self.logic(v, 32); self.pc = pc + 4; return
+            if b1 in (0x40, 0x41) and b2 == 0x6D:              # stc.w ccr/exr,@-sp / ldc.w @sp+,ccr/exr
+                if b3 & 0x80:
+                    self.er[7] = (self.er[7] - 2) & 0xFFFFFFFF
+                    self.ww(self.er[7], (self.ccr() if b1 == 0x40 else self.exr) << 8)
+                else:
+                    v = self.rw(self.er[7]) >> 8; self.er[7] = (self.er[7] + 2) & 0xFFFFFFFF
+                    if b1 == 0x40: self.set_ccr(v)
+                    else: self.exr = v
+                self.pc = pc + 4; return
+            if b1 == 0x41 and b2 in (0x04, 0x06, 0x07):        # orc / andc / ldc #imm,exr
+                self.exr = {0x04: self.exr | b3, 0x06: self.exr & b3, 0x07: b3}[b2] & 0xFF; self.pc = pc + 4; return
             if b1 == 0x40:                                     # ldc/stc @mem forms: treat as nop-ish loads
                 if b2 == 0x69: self.pc = pc + 4; return
                 if b2 == 0x6F: self.pc = pc + 6; return

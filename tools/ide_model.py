@@ -116,6 +116,9 @@ class CFCard:
         elif self.pos % 512 == 0: self.irq = True                                          # ready for the next sector
 
 
+DTC_DELAY = 400
+
+
 class IdeEmu(h8emu.Emu):
     """h8emu with the CF card on the IDE port. `swap` = byte order of data words as the H8 sees them."""
     def __init__(self, image, card, swap=False):
@@ -124,8 +127,12 @@ class IdeEmu(h8emu.Emu):
         self.isr, self.in_isr, self.irqs = 0xB44, False, 0             # boot ROM IDE interrupt handler (IRQ2)
         # DTC (the H8S data transfer controller) moves each sector as two 256-byte bursts, paced by a timer: register
         # info at 0xFF0000 + word @ROM 0x450 (= 0xFFF95C: MRA, SAR 24, MRB, DAR 24, CRA, CRB); started by setting
-        # 0xFFFFE4 bit 0 with the DTC enabled (0xFFFF31 bit 1); its end interrupt = RAM vector 40 (0x4000A0)
-        self.dtc_pend, self.dtc_runs = False, 0
+        # 0xFFFFE4 bit 0 with the DTC enabled (0xFFFF31 bit 1); its end interrupt = RAM vector 40 (0x4000A0).
+        # Writes use a second record (word @ROM 0x458 = 0xFFF974), enabled by 0xFFFF32 bit 7 and started with the timer
+        # bit 0xFFFFC0 bit 2 (ROM 0x1EC0); its end interrupt = RAM vector 44 (0x4000B0, ISR 0xE26)
+        # A burst takes time on the real chip (timer-paced blocks): the code moves its buffer pointer on while it runs,
+        # so the transfer happens DTC_DELAY steps after the start, not at once.
+        self.dtc_pend, self.dtc_runs, self.dtc_due = None, 0, None
         self.latch = bytearray(0x100)                                # 0x200000-0x2000FF control latches (0x200010 bit 3:
         self.latch_log = []                                          # set on the ATAPI path, cleared on ATA)
     def rb(self, a):
@@ -138,7 +145,9 @@ class IdeEmu(h8emu.Emu):
     def wb(self, a, v):
         a &= 0xFFFFFF
         if a == 0xFFFFE4 and v & 1 and not self.onchip[0xFE4] & 1 and self.onchip[0xF31] & 2:
-            self.onchip[0xFE4] = v & 0xFF; self.dtc_run(); return
+            self.onchip[0xFE4] = v & 0xFF; self.dtc_due = (self.steps + DTC_DELAY, (0x450, 0xF31, 2, 0x4000A0)); return
+        if a == 0xFFFFC0 and v & 4 and not self.onchip[0xFC0] & 4 and self.onchip[0xF32] & 0x80:
+            self.onchip[0xFC0] = v & 0xFF; self.dtc_due = (self.steps + DTC_DELAY, (0x458, 0xF32, 0x80, 0x4000B0)); return
         if 0x200000 <= a < 0x200100:
             self.latch[a - 0x200000] = v & 0xFF; self.latch_log.append((a, v & 0xFF)); return
         if IDE_LO <= a < IDE_HI:
@@ -160,17 +169,19 @@ class IdeEmu(h8emu.Emu):
         if IDE_LO <= (a & 0xFFFFFF) < IDE_HI: self.wb(a & ~1, v >> 8); return
         return super().ww(a, v)
     def step(self):                                                  # IRQ2 entry (advanced mode: CCR:PC on the stack)
-        if self.dtc_pend and not self.in_isr:                         # DTC end: vector 40 via the RAM vector table
-            self.dtc_pend, self.in_isr = False, True
-            self.push32((self.ccr() << 24) | self.pc); self.I = 1; self.pc = self.rl(0x4000A0) & 0xFFFFFF; return
+        if self.dtc_due and self.steps >= self.dtc_due[0]:
+            args, self.dtc_due = self.dtc_due[1], None; self.dtc_run(*args)
+        if self.dtc_pend and not self.in_isr:                         # DTC end: its vector via the RAM vector table
+            vec, self.dtc_pend, self.in_isr = self.dtc_pend, None, True
+            self.push32((self.ccr() << 24) | self.pc); self.I = 1; self.pc = self.rl(vec) & 0xFFFFFF; return
         if self.card.irq and not self.in_isr:
             self.card.irq, self.in_isr = False, True; self.irqs += 1
             self.push32((self.ccr() << 24) | self.pc); self.I = 1; self.pc = self.isr; return
         if self.in_isr and self.rw(self.pc) == 0x5670:                # rte
             v = self.pop32(); self.set_ccr(v >> 24); self.pc = v & 0xFFFFFF; self.in_isr = False; return
         super().step()
-    def dtc_run(self):
-        base = 0xFF0000 + ((self.boot[0x450] << 8) | self.boot[0x451])
+    def dtc_run(self, info, dte, bit, vec):
+        base = 0xFF0000 + ((self.boot[info] << 8) | self.boot[info + 1])
         mra, mrb = self.rb(base), self.rb(base + 4)
         sar = (self.rb(base + 1) << 16) | (self.rb(base + 2) << 8) | self.rb(base + 3)
         dar = (self.rb(base + 5) << 16) | (self.rb(base + 6) << 8) | self.rb(base + 7)
@@ -184,5 +195,5 @@ class IdeEmu(h8emu.Emu):
             sar += step.get(mra >> 6, 0); dar += step.get((mra >> 4) & 3, 0)
         for k, v in ((1, sar >> 16), (2, sar >> 8), (3, sar), (5, dar >> 16), (6, dar >> 8), (7, dar)): self.wb(base + k, v & 0xFF)
         self.ww(base + 10, 0)
-        self.onchip[0xF31] &= ~2                                      # DTCE cleared at the end (DISEL)
-        self.dtc_pend, self.dtc_runs = True, self.dtc_runs + 1
+        self.onchip[dte] &= ~bit                                      # DTCE cleared at the end (DISEL)
+        self.dtc_pend, self.dtc_runs = vec, self.dtc_runs + 1
