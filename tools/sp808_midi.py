@@ -86,7 +86,45 @@ class Midi:
         ch = 15 if code < 0x80 else 14
         if down: self.send(0x90 | ch, code & 0x7F, 96 if shift else 32)
         else: self.send(0x80 | ch, code & 0x7F, 0)
+    def sysex(self, data):                            # one complete F0 .. F7 message, blocks until sent
+        b = ctypes.create_string_buffer(bytes(data), len(data))
+        h = MIDIHDR(ctypes.addressof(b), len(data), len(data), 0, 0, None, 0, 0)
+        wm.midiOutPrepareHeader(self.h, ctypes.byref(h), ctypes.sizeof(h))
+        r = wm.midiOutLongMsg(self.h, ctypes.byref(h), ctypes.sizeof(h))
+        if r: sys.exit('midiOutLongMsg failed: %d' % r)
+        while not h.dwFlags & 1: time.sleep(0.001)    # MHDR_DONE
+        wm.midiOutUnprepareHeader(self.h, ctypes.byref(h), ctypes.sizeof(h))
     def close(self): wm.midiOutClose(self.h)      # no midiOutReset: its note-offs on ch 15/16 = key releases
+
+
+def smf_sysex(path):
+    """format-0 SMF -> [(seconds, F0..F7 message)], with the file's own tempo (Roland's update pacing)"""
+    d = open(path, 'rb').read()
+    assert d[:4] == b'MThd'
+    div = struct.unpack('>H', d[12:14])[0]; i = 14
+    while d[i:i + 4] != b'MTrk': i += 8 + struct.unpack('>I', d[i + 4:i + 8])[0]
+    end = i + 8 + struct.unpack('>I', d[i + 4:i + 8])[0]; i += 8
+    def vlq():
+        nonlocal i
+        v = 0
+        while True:
+            c = d[i]; i += 1; v = v << 7 | c & 0x7F
+            if c < 0x80: return v
+    t, tempo, out, run = 0.0, 500000, [], 0
+    while i < end:
+        t += vlq() * tempo / 1e6 / div
+        s = d[i]
+        if s == 0xFF:
+            typ = d[i + 1]; i += 2; n = vlq()
+            if typ == 0x51: tempo = int.from_bytes(d[i:i + 3], 'big')
+            i += n
+            if typ == 0x2F: break
+        elif s in (0xF0, 0xF7):
+            i += 1; n = vlq(); out.append((t, (b'\xF0' if s == 0xF0 else b'') + d[i:i + n])); i += n
+        else:                                          # channel events (none expected): skip with running status
+            if s & 0x80: run = s; i += 1
+            i += 1 if run & 0xE0 == 0xC0 else 2
+    return out
 
 
 class Rec:                                            # waveIn, polled (CALLBACK_NULL), 16-bit stereo
@@ -301,6 +339,27 @@ def main():
                 rec.stop(recp); json.dump(dict(rate=rate, device=rec.name, midi=midi.name, events=log),
                                           open(recp.rsplit('.', 1)[0] + '.json', 'w'), indent=1)
             for x in log: print(x)
+        elif a[0] == 'update':                        # Roland's SMF update into the boot ROM's "Waiting MIDI..." mode
+            files = [os.path.join(a[1], 'SP808#%d.MID' % n) for n in range(1, 9)]
+            evs = [smf_sysex(f) for f in files]
+            print('%d files, %d SysEx, %.0f s at the files\' own pacing' % (len(files), sum(map(len, evs)),
+                                                                           sum(e[-1][0] for e in evs if e)))
+            if not opt('--no-check', flag=True):     # the running OS (Rosetta) answers a ping: not in update mode
+                try:
+                    mi = MidiIn(opt('--midi-in') or 'octa')
+                    try: v = Talk(midi, mi).ping()
+                    finally: mi.close()
+                except SystemExit: v = None
+                if v: sys.exit('Rosetta OS %s answered: the unit is NOT in "Waiting MIDI..." mode, nothing sent' % v)
+            for n, ev in enumerate(evs, 1):
+                t0 = time.perf_counter()
+                for k, (t, m) in enumerate(ev):
+                    while time.perf_counter() - t0 < t: time.sleep(0.0005)
+                    midi.sysex(m)
+                    if k % 100 == 0: print('\rfile %d/8: %d/%d' % (n, k, len(ev)), end='', flush=True)
+                print('\rfile %d/8: %d/%d sent in %.1f s' % (n, len(ev), len(ev), time.perf_counter() - t0))
+                time.sleep(1.0)
+            print('all sent: the unit should ask "Update System? (Y/N)"')
         elif a[0] in ('ping', 'peek', 'poke', 'screen', 'state'):   # v1.99 talk-back (needs SP-808 MIDI OUT -> PC)
             mi = MidiIn(opt('--midi-in') or msub); print('MIDI <-', mi.name)
             try:
