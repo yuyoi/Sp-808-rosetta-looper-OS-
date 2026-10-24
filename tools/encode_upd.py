@@ -1,5 +1,7 @@
 """Build Roland-format MIDI update files (SP808#1-8.MID) for a patched SP-808 OS image, for the boot ROM's own update
 mode (SP-808: power on holding STATUS + EFFECTS above fader A -> "Waiting MIDI..."; play the 8 files in order).
+The template can be the SP-808 1.05 update or the SP-808EX 1.001 one; the output always carries the SP-808 header
+(model 7C), which is what this unit's boot ROM accepts (it ignores the EX's model 00 2B).
 
 Roland's update is the template: every message, its timing and all control messages stay exactly as Roland made them;
 data messages get the new image's bytes (re-packed 7-bit, new checksum). The boot ROM receiver (0x2D66) fills its
@@ -76,11 +78,23 @@ def data_msg(addr, payload):
     return HDR + body + bytes([-sum(body) & 0x7F, 0xF7])
 
 
+def hdr_len(m):                                  # Roland DT1 header of either update (1.05: 4 bytes, EX: 5)
+    return next((len(x) for x in decode_upd.HEADERS if m.startswith(x)), 0)
+
+
+def relabel(m):
+    """any update SysEx -> the SP-808 header (the checksum starts after the header, so it stays valid). An SP-808
+    boot ROM ignores the EX's model 00 2B; this is how EX images go into an SP-808-boot-ROM unit over MIDI."""
+    h = hdr_len(m)
+    return HDR + m[h:] if h else m
+
+
 def parse_data(m):
     """SysEx data -> (flash address, payload length) for a data message, else None"""
-    if not m.startswith(HDR) or m[4:7] != b'\x00\x00\x01': return None
-    b = m[8:12]
-    return FLASH + m[7] * 0x10000 + (b[0] << 12 | b[1] << 8 | b[2] << 4 | b[3]), (len(m) - 14) // 8 * 7
+    h = hdr_len(m)
+    if not h or m[h:h + 3] != b'\x00\x00\x01': return None
+    b = m[h + 4:h + 8]
+    return FLASH + m[h + 3] * 0x10000 + (b[0] << 12 | b[1] << 8 | b[2] << 4 | b[3]), (len(m) - h - 10) // 8 * 7
 
 
 def coverage(tracks):
@@ -118,9 +132,11 @@ def encode(folder, new, outdir):
         for dt, raw in evs:
             m = sysex_of(raw) if raw[0] == 0xF0 else None
             p = parse_data(m) if m else None
+            if m and not p and m != relabel(m):              # an EX control message: SP-808 header
+                mm = relabel(m); raw = b'\xF0' + vlq(len(mm)) + mm
             if p:
                 a, ln = p; o = a - FLASH
-                pay = new[o:o + ln] + decode_upd.unpack7(m[12:-2])[SIZE - o:] if o + ln > SIZE else new[o:o + ln]
+                pay = new[o:o + ln] + decode_upd.unpack7(m[hdr_len(m) + 8:-2])[SIZE - o:] if o + ln > SIZE else new[o:o + ln]
                 if o + ln >= SIZE:                               # the last data message: the extras go first
                     for ea, ep in ext:
                         mm = data_msg(ea, ep); out.append((step, b'\xF0' + vlq(len(mm)) + mm))
