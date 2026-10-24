@@ -256,5 +256,10 @@ Built, waiting for the card:
 - [ ] Stretch: an animation page with Hex Girl dancing, an uwu face mode and adjustable glitches.
 - [ ] Looper v2: 4 loops synced to loop 1, faders A-D, ASSIGN menu (single-switch mode), per-loop FX
   (plan in `LOOPER_DESIGN.md`).
+- [ ] **Plain CF cards (cheap IDE-to-CF adapters, e.g. StarTech 35BAYCF2IDE), in progress.** The SP-808 boot ROM already
+  has an ATA driver: in the emulator, a virtual CF card (`tools/ide_model.py`, `tools/test_cf.py`) is detected as ATA,
+  identified, and read sector-exact through Roland's own driver (interrupts + DTC modelled). Next: find where the OS
+  insists on an ATAPI Zip, then a patch for the stock SP-808EX OS too (a Rosetta Patcher option once it works). LAB >
+  DISK INFO shows what the unit detected, for testers.
 - [ ] Strip the groove/song screens.
 - [ ] Doom.

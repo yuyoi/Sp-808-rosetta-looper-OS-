@@ -122,6 +122,10 @@ class IdeEmu(h8emu.Emu):
         super().__init__(image)
         self.card, self.swap = card, swap
         self.isr, self.in_isr, self.irqs = 0xB44, False, 0             # boot ROM IDE interrupt handler (IRQ2)
+        # DTC (the H8S data transfer controller) moves each sector as two 256-byte bursts, paced by a timer: register
+        # info at 0xFF0000 + word @ROM 0x450 (= 0xFFF95C: MRA, SAR 24, MRB, DAR 24, CRA, CRB); started by setting
+        # 0xFFFFE4 bit 0 with the DTC enabled (0xFFFF31 bit 1); its end interrupt = RAM vector 40 (0x4000A0)
+        self.dtc_pend, self.dtc_runs = False, 0
         self.latch = bytearray(0x100)                                # 0x200000-0x2000FF control latches (0x200010 bit 3:
         self.latch_log = []                                          # set on the ATAPI path, cleared on ATA)
     def rb(self, a):
@@ -133,6 +137,8 @@ class IdeEmu(h8emu.Emu):
         return super().rb(a)
     def wb(self, a, v):
         a &= 0xFFFFFF
+        if a == 0xFFFFE4 and v & 1 and not self.onchip[0xFE4] & 1 and self.onchip[0xF31] & 2:
+            self.onchip[0xFE4] = v & 0xFF; self.dtc_run(); return
         if 0x200000 <= a < 0x200100:
             self.latch[a - 0x200000] = v & 0xFF; self.latch_log.append((a, v & 0xFF)); return
         if IDE_LO <= a < IDE_HI:
@@ -154,9 +160,29 @@ class IdeEmu(h8emu.Emu):
         if IDE_LO <= (a & 0xFFFFFF) < IDE_HI: self.wb(a & ~1, v >> 8); return
         return super().ww(a, v)
     def step(self):                                                  # IRQ2 entry (advanced mode: CCR:PC on the stack)
+        if self.dtc_pend and not self.in_isr:                         # DTC end: vector 40 via the RAM vector table
+            self.dtc_pend, self.in_isr = False, True
+            self.push32((self.ccr() << 24) | self.pc); self.I = 1; self.pc = self.rl(0x4000A0) & 0xFFFFFF; return
         if self.card.irq and not self.in_isr:
             self.card.irq, self.in_isr = False, True; self.irqs += 1
             self.push32((self.ccr() << 24) | self.pc); self.I = 1; self.pc = self.isr; return
         if self.in_isr and self.rw(self.pc) == 0x5670:                # rte
             v = self.pop32(); self.set_ccr(v >> 24); self.pc = v & 0xFFFFFF; self.in_isr = False; return
         super().step()
+    def dtc_run(self):
+        base = 0xFF0000 + ((self.boot[0x450] << 8) | self.boot[0x451])
+        mra, mrb = self.rb(base), self.rb(base + 4)
+        sar = (self.rb(base + 1) << 16) | (self.rb(base + 2) << 8) | self.rb(base + 3)
+        dar = (self.rb(base + 5) << 16) | (self.rb(base + 6) << 8) | self.rb(base + 7)
+        cra, crb = self.rw(base + 8), self.rw(base + 10)
+        size, mode = (2 if mra & 1 else 1), (mra >> 2) & 3
+        n = (cra & 0xFF) * (crb or 0x10000) if mode == 2 else (cra or 0x10000)
+        step = {0: 0, 2: size, 3: -size}
+        for _ in range(n):
+            if size == 2: self.ww(dar, self.rw(sar))
+            else: self.wb(dar, self.rb(sar))
+            sar += step.get(mra >> 6, 0); dar += step.get((mra >> 4) & 3, 0)
+        for k, v in ((1, sar >> 16), (2, sar >> 8), (3, sar), (5, dar >> 16), (6, dar >> 8), (7, dar)): self.wb(base + k, v & 0xFF)
+        self.ww(base + 10, 0)
+        self.onchip[0xF31] &= ~2                                      # DTCE cleared at the end (DISEL)
+        self.dtc_pend, self.dtc_runs = True, self.dtc_runs + 1
