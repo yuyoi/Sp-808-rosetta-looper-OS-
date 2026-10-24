@@ -5,14 +5,13 @@
 # SP-808 Rosetta Looper OS
 
 > **NEW: plain CF cards instead of the Zip (October 2026).** A cheap IDE-to-CF adapter (tested: StarTech
-> 35BAYCF2IDE, card in the master slot) replaces the dying Iomega Zip drive. First hardware test on an SP-808 with
-> Roland's stock OS 1.05 + the CF patch: it boots, samples, saves, keeps everything over a power-cycle, and is
-> **faster than a ZuluIDE**. The boot ROM already
-> drives ATA cards; the OS only stalled on two Zip-only commands (about a second each, every disk check), and
-> `tools/cf_patch.py` skips them on CF (a Zip behaves as before). It is also an option in Rosetta Patcher ("CF card
-> support (beta)"), for Rosetta or for Roland's stock OS. **No Zip drive at all?** It installs over MIDI too: see
-> [CF cards](#cf-cards-no-zip-needed). Still untested on hardware: Rosetta + CF and the SP-808EX OS + CF. Reports
-> welcome on [Discord](https://discord.gg/R3CQkFdRtf).
+> 35BAYCF2IDE, card in the master slot) replaces the dying Iomega Zip drive. **Works on hardware with Roland's stock
+> OS 1.05 + CF and with the SP-808EX OS 1.001 + CF** (shows as 1.002): it boots, samples, saves, keeps everything over
+> a power-cycle and an OS update, and is **faster than a ZuluIDE**. The boot ROM already drives ATA cards; the OS only
+> stalled on two Zip-only commands (about a second each, every disk check), and `tools/cf_patch.py` skips them on CF
+> (a Zip behaves as before). It is also an option in Rosetta Patcher ("CF card support (beta)"), for Rosetta or for
+> Roland's stock OS. **No Zip drive at all?** Both install over MIDI: see [CF cards](#cf-cards-no-zip-needed). Still
+> untested on hardware: Rosetta + CF. Reports welcome on [Discord](https://discord.gg/R3CQkFdRtf).
 
 > **Runs on real hardware.** Custom firmware boots on a real Roland SP-808(EX) and installs straight from a Zip or
 > ZuluIDE SD card: Roland-chan boot animation, own home menu, MPC-style pad sampling, and **KEYS: an 8-voice pitched
@@ -135,13 +134,15 @@ CF beta: add `--cf`, or `--stock --cf` with `SP808v1050.zip` or `SP808EXv1001.zi
 2. **Adapter:** a passive IDE-to-CF adapter in place of the Zip drive, card as **master**, 5 V connected.
 3. **Install the CF build**, either way:
    - **From a Zip / ZuluIDE:** Rosetta Patcher with "CF card support (beta)" -> `SP808.PRG`, install as usual.
-   - **Over MIDI (no Zip drive):** unzip Roland's update into `upd/`, then
-     `python -I tools/rosetta_patcher.py --upd upd --out out --stock --cf` and
+   - **Over MIDI (no Zip drive):** unzip Roland's update into `upd/` (SP808v1050.zip, or SP808EXv1001.zip for the
+     EX OS), then `python -I tools/rosetta_patcher.py --upd upd --out out --stock --cf` and
      `python -I tools/encode_upd.py upd out/SP808.PRG out/midi`. This makes Roland-format `SP808#1-8.MID` with the patch
      inside (checked with the boot ROM's own MIDI receiver in an emulator). Power on holding **STATUS + EFFECTS above
      fader A** ("Waiting MIDI..."), play the 8 files in order from any sequencer (or
      `python -I tools/sp808_midi.py update out/midi --midi <your MIDI out> --no-check`), answer YES to
-     "Update System?". The SP-808's boot ROM takes the SP-808 (1.05) format.
+     "Update System?". Both ways worked on hardware. Our unit's boot ROM only takes the SP-808 header (model 7C), so the
+     encoder relabels the EX files to it (the checksum does not cover the header). Roland's own EX files carry model
+     00 2B, which that boot ROM's receiver skips.
 4. **Check:** with Rosetta, LAB > DISK INFO shows TYPE ATA (CF/HD), the size and any error.
 
 By hand: unzip `SP808#1.MID` .. `SP808#8.MID` into `upd/`, then:
@@ -285,7 +286,7 @@ Built, waiting for the card:
 - [ ] Looper v2: 4 loops synced to loop 1, faders A-D, ASSIGN menu (single-switch mode), per-loop FX
   (plan in `LOOPER_DESIGN.md`).
 - [x] **Plain CF cards (cheap IDE-to-CF adapters, e.g. StarTech 35BAYCF2IDE): CF beta, WORKS on hardware with stock
-  1.05 + CF (first test, flashed over MIDI); Rosetta + CF and EX + CF not tested yet.** The
+  1.05 + CF and with SP-808EX 1.001 + CF (both flashed over MIDI); Rosetta + CF not tested yet.** The
   SP-808 boot ROM already has an ATA driver: in the emulator, a virtual CF card (`tools/ide_model.py`,
   `tools/test_cf.py`) is detected, read and written sector-exact through Roland's own driver (interrupts + both DTC
   channels modelled), and the OS disk check accepts it. The OS only trips on two Zip-only calls (an ATAPI MODE SELECT
@@ -294,6 +295,6 @@ Built, waiting for the card:
   before). It works on Rosetta and on Roland's stock OS 1.05 / SP-808EX 1.001 (Rosetta Patcher option).
   To try it: write an SP-808 disk image raw onto the card, install from the Zip / ZuluIDE first, then swap in the
   adapter (card as master). LAB > DISK INFO shows what the unit detected. Hardware: stock 1.05 + CF boots, samples, saves and survives a
-  power-cycle; please report other cards and the EX on Discord.
+  power-cycle, and so does EX 1.001 + CF; please report other cards and adapters on Discord.
 - [ ] Strip the groove/song screens.
 - [ ] Doom.
