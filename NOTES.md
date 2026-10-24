@@ -264,6 +264,16 @@ Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note f
   - **Drive struct `0x401000`:** +0 busy, +1 present, +6 heads, +8 sectors per track, +0x0A capacity (sectors), +0x14 type, +0x1E error word. The OS self-test 0x1268AA writes / reads a block at capacity - 0x40.
   - **The OS side:** 0x124978 compares the INQUIRY vendor (+8, 8 bytes) with "IOMEGA  " / "iomega  " (table 0x160920) and the model (+0x10) with "ZIP"; no match skips the device. Device kinds "SELF / ZIP / HD / CD" (0x1608F0).
   - **Next:** find where the boot ROM sets `@0x401014` (ATA vs ATAPI detect) and where the OS insists on Zip. Then make the internal IDE accept an ATA disk = a CF card. Compare with the A-6's code.
+  - **Boot ROM detect (done):**
+    - IDE init `0x400388` -> ROM 0xF30: SRST via device control `0x60001C` (0x0C00 then 0x0800), wait for BSY.
+    - Signature `0x1FA4`: sector count / number = 1/1, then cylinder lo / hi:
+      - 00 / 00 with status 0x50 -> **type 0 = ATA** (a CF card / hard disk)
+      - 14 / EB -> **type 1 = ATAPI** (the Zip)
+    - It stores `@0x401014`. The same detect code is copied into the A-6 OS (0x1012E0), so the A-6 drives IDE itself.
+  - **OS disk state:** `0x10570C` (1.05) computes `@0x40F937`: 0 = no disk, 2 = OK, 3 = error 0xFFFF, 4 = ... `0x14807E` turns it into screen 3 message 0 / 1 / 2 ("Please Insert / Zip Disk.", "Wrong Disk.", "(Write Protected.)").
+  - **Type-0 handling:** the OS reads `@0x401014` in 3 places (0x105F76: type 0 -> `0x40039C`; 0x105FE8 / 0x106012: type 1 -> `0x400398` else `0x400394`). So it has an ATA branch.
+  - **The EX 1.001 has the identical structure:** type reads at 0x105CBA / 0x105D2C / 0x105D56, IOMEGA table 0x171AF0 (refs 0x12AFB8 / D0 / EE), the same boot ROM call counts. So a CF patch for the stock EX = the same design at shifted addresses (the user wants it on the stock EX, not only Rosetta).
+  - **Fastest next fact:** a tester puts a True-IDE CF card on the stock EX and reports the screen (Format offer? Wrong Disk? Insert Zip?). With Rosetta 2.00: LAB > DISK INFO.
 - **MIDI remote keys + hardware-in-the-loop (2026-10-15, user: "looper trigger via MIDI so the loop lane can fix the
   loop logic itself"; PC = Focusrite 6i6 audio + MIDI):** a note on MIDI channel 16 = key code <note>, channel 15 =
   0x80 + note, velocity 64+ = SHIFT, note-off / velocity 0 = release. `m_on_tr` / `m_off_tr` queue them (channels
