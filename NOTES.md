@@ -253,6 +253,17 @@ DSP model end to end). Dumps live in `work/dsp/` (Roland data, not committed).
 Rules, space ledger and owners: `PARALLEL.md` (local, not in git). Newest note first under each heading.
 
 #### Lane LEAD: KEYS / synth, merges, versions, the card
+- **CF card support: research (2026-10-24, the user has testers; RE only, nothing built yet):**
+  - **Why:** the Roland/Edirol **A-6 Video Canvas** shares the SP-808 platform. Same SysEx model ID 0x7C, OS "1.010", header "RolandEC", about 39% of its bytes equal to 1.05. Its update is in `upd_a6/` -> `sp808_a6_raw.bin` (git-ignored). It records to an internal hard disk, so plain ATA. CF in True-IDE mode looks like an ATA disk, hence "the A-6 takes regular CF".
+  - **The OS does no IDE I/O itself.** It calls boot ROM disk functions through RAM vectors:
+    - `0x4003A0` -> ROM 0x1228, `0x4003A4` -> 0x12D2, `0x4003A8` -> 0x13C2, `0x4003AC` -> 0x15F4.
+    - The A-6 OS calls them far less (0x4003A8: 2x vs 8x), so it may carry its own driver.
+  - **The boot ROM already speaks ATA.**
+    - 0x13C2 checks the drive type `@0x401014`: 1 -> 0x2B52 (the other path, likely ATAPI / Zip).
+    - Else it writes ATA task registers at `0x600000 + 2n`: sector count `0x600004`, device/head `0x60000C` = 0xA0 | (head - 1), command `0x60000E` = 0x91 INITIALIZE DEVICE PARAMETERS (CHS from `@0x401006` heads / `@0x401008` sectors).
+  - **Drive struct `0x401000`:** +0 busy, +1 present, +6 heads, +8 sectors per track, +0x0A capacity (sectors), +0x14 type, +0x1E error word. The OS self-test 0x1268AA writes / reads a block at capacity - 0x40.
+  - **The OS side:** 0x124978 compares the INQUIRY vendor (+8, 8 bytes) with "IOMEGA  " / "iomega  " (table 0x160920) and the model (+0x10) with "ZIP"; no match skips the device. Device kinds "SELF / ZIP / HD / CD" (0x1608F0).
+  - **Next:** find where the boot ROM sets `@0x401014` (ATA vs ATAPI detect) and where the OS insists on Zip. Then make the internal IDE accept an ATA disk = a CF card. Compare with the A-6's code.
 - **MIDI remote keys + hardware-in-the-loop (2026-10-15, user: "looper trigger via MIDI so the loop lane can fix the
   loop logic itself"; PC = Focusrite 6i6 audio + MIDI):** a note on MIDI channel 16 = key code <note>, channel 15 =
   0x80 + note, velocity 64+ = SHIFT, note-off / velocity 0 = release. `m_on_tr` / `m_off_tr` queue them (channels
