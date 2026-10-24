@@ -8,7 +8,7 @@ as data reaches the end address 0x1C0000. Roland's files never send 0x16AD5E-0x1
 stub at 0x1BF000) go in extra messages placed before Roland's last data message (the header copy at 0x1BFFDA).
 File bits (0x994C) come from the control messages, so "Data Not Enough!" sees the same 8 files.
 
-usage: python -I tools/encode_upd.py <folder with Roland's SP808#1-8.MID> new_raw.bin outdir
+usage: python -I tools/encode_upd.py <folder with Roland's SP808#1-8.MID> new_raw.bin|SP808.PRG outdir
 """
 import os, struct, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -145,5 +145,7 @@ def expected(folder, new):
 
 if __name__ == '__main__':
     folder, raw, outdir = sys.argv[1:4]
-    n = encode(folder, open(raw, 'rb').read(), outdir)
+    d = open(raw, 'rb').read()
+    if len(d) == SIZE + 8: d = d[8:]                              # an SP808.PRG (8-byte header)
+    n = encode(folder, d, outdir)
     print('%d data messages changed -> %s' % (n, outdir))
